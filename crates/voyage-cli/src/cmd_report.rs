@@ -47,7 +47,6 @@ pub fn run(
         + overall.cache_read_tokens
         + overall.cache_creation_tokens;
 
-    // Cache efficiency
     let cache_tokens = overall.cache_read_tokens + overall.cache_creation_tokens;
     let cache_hit_rate = if overall.input_tokens + cache_tokens > 0 {
         overall.cache_read_tokens as f64 / (overall.input_tokens + cache_tokens) as f64 * 100.0
@@ -55,14 +54,13 @@ pub fn run(
         0.0
     };
 
-    // Avg cost per session
     let avg_cost = if overall.session_count > 0 {
         overall.total_cost_usd / overall.session_count as f64
     } else {
         0.0
     };
 
-    // Daily chart data
+    // Chart data serialization
     let daily_labels: String = daily.iter().map(|d| format!("\"{}\"", &d.date[5..])).collect::<Vec<_>>().join(",");
     let daily_costs: String = daily.iter().map(|d| format!("{:.4}", d.total_cost_usd)).collect::<Vec<_>>().join(",");
     let daily_sessions: String = daily.iter().map(|d| d.session_count.to_string()).collect::<Vec<_>>().join(",");
@@ -70,15 +68,12 @@ pub fn run(
     let daily_output: String = daily.iter().map(|d| (d.output_tokens / 1000).to_string()).collect::<Vec<_>>().join(",");
     let daily_turns: String = daily.iter().map(|d| d.turn_count.to_string()).collect::<Vec<_>>().join(",");
 
-    // Model chart data
     let model_labels: String = by_model.iter().map(|m| format!("\"{}\"", m.model)).collect::<Vec<_>>().join(",");
     let model_costs: String = by_model.iter().map(|m| format!("{:.4}", m.total_cost_usd)).collect::<Vec<_>>().join(",");
 
-    // Provider chart data
     let provider_labels: String = by_provider.iter().map(|p| format!("\"{}\"", p.provider)).collect::<Vec<_>>().join(",");
     let provider_costs: String = by_provider.iter().map(|p| format!("{:.4}", p.total_cost_usd)).collect::<Vec<_>>().join(",");
 
-    // Project chart data (top 10)
     let top_projects = &projects[..projects.len().min(10)];
     let proj_labels: String = top_projects.iter().map(|(name, _)| {
         let short = if name.len() > 35 { format!("...{}", &name[name.len() - 32..]) } else { name.clone() };
@@ -86,7 +81,6 @@ pub fn run(
     }).collect::<Vec<_>>().join(",");
     let proj_costs: String = top_projects.iter().map(|(_, s)| format!("{:.4}", s.2)).collect::<Vec<_>>().join(",");
 
-    // Token breakdown for doughnut
     let token_breakdown_labels = r#""Input","Output","Cache Read","Cache Write""#;
     let token_breakdown_data = format!(
         "{},{},{},{}",
@@ -100,9 +94,9 @@ pub fn run(
         let tokens_str = format_tokens(total);
         let project_short = shorten_path(&s.project, 40);
         let provider_badge = match s.provider {
-            voyage_core::model::Provider::ClaudeCode => r#"<span class="badge claude">Claude</span>"#,
-            voyage_core::model::Provider::OpenCode => r#"<span class="badge opencode">OpenCode</span>"#,
-            voyage_core::model::Provider::Codex => r#"<span class="badge codex">Codex</span>"#,
+            voyage_core::model::Provider::ClaudeCode => r#"<span class="badge badge-claude">Claude</span>"#,
+            voyage_core::model::Provider::OpenCode => r#"<span class="badge badge-opencode">OpenCode</span>"#,
+            voyage_core::model::Provider::Codex => r#"<span class="badge badge-codex">Codex</span>"#,
         };
         let model_short = if s.model.len() > 20 {
             format!("{}...", &s.model[..17])
@@ -123,8 +117,8 @@ pub fn run(
               <td>{msgs}</td>
               <td>{turns}</td>
               <td class="num">{tokens}</td>
-              <td><div class="token-bar"><span class="bar-in" style="width:{input_pct}%"></span><span class="bar-out" style="width:{output_pct}%"></span><span class="bar-cache" style="width:{cache_pct}%"></span></div></td>
-              <td class="num cost-cell">${cost:.4}</td>
+              <td><div class="comp-bar"><span class="seg-in" style="width:{input_pct}%"></span><span class="seg-out" style="width:{output_pct}%"></span><span class="seg-cache" style="width:{cache_pct}%"></span></div></td>
+              <td class="num cost-val">${cost:.4}</td>
             </tr>"#,
             id = &s.id.to_string()[..8],
             provider = provider_badge,
@@ -142,11 +136,10 @@ pub fn run(
         )
     }).collect::<Vec<_>>().join("\n");
 
-    // Project detail rows
     let project_detail_rows: String = projects.iter().map(|(name, stats)| {
         let total = stats.0 + stats.1;
         format!(
-            r#"<tr><td title="{name}">{short}</td><td class="num">{sessions}</td><td class="num">{turns}</td><td class="num">{tokens}</td><td class="num cost-cell">${cost:.4}</td><td class="num">${avg:.4}</td></tr>"#,
+            r#"<tr><td title="{name}">{short}</td><td class="num">{sessions}</td><td class="num">{turns}</td><td class="num">{tokens}</td><td class="num cost-val">${cost:.4}</td><td class="num">${avg:.4}</td></tr>"#,
             name = name,
             short = shorten_path(name, 50),
             sessions = stats.3,
@@ -159,299 +152,374 @@ pub fn run(
 
     let html = format!(
         r##"<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Voyage — Token Analytics</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+/* ── Semantic tokens: dark theme (default) ─────────────────── */
+:root, [data-theme="dark"] {{
+  --bg:          oklch(12% 0.01 250);
+  --surface-1:   oklch(16% 0.01 250);
+  --surface-2:   oklch(21% 0.01 250);
+  --border:      oklch(30% 0.01 250);
+  --border-sub:  oklch(22% 0.01 250);
 
-:root {{
-  --bg: #09090b; --surface: #18181b; --surface-2: #27272a;
-  --border: #3f3f46; --border-subtle: #27272a;
-  --text: #fafafa; --text-2: #a1a1aa; --text-3: #71717a;
-  --blue: #60a5fa; --green: #4ade80; --amber: #fbbf24;
-  --red: #f87171; --purple: #c084fc; --cyan: #22d3ee;
-  --teal: #2dd4bf; --pink: #f472b6; --orange: #fb923c;
-  --radius: 10px;
+  --text-1:      oklch(93% 0.01 250);
+  --text-2:      oklch(65% 0.02 250);
+  --text-3:      oklch(50% 0.02 250);
+
+  --accent:      oklch(65% 0.14 220);
+  --accent-dim:  oklch(65% 0.14 220 / 0.12);
+  --success:     oklch(68% 0.16 155);
+  --success-dim: oklch(68% 0.16 155 / 0.12);
+  --warn:        oklch(75% 0.15 75);
+  --warn-dim:    oklch(75% 0.15 75 / 0.12);
+  --error:       oklch(65% 0.2 25);
+  --muted:       oklch(60% 0.1 280);
+  --muted-dim:   oklch(60% 0.1 280 / 0.12);
+
+  --chart-grid:  oklch(22% 0.01 250);
+  --chart-text:  oklch(50% 0.02 250);
+
+  --body-weight: 400;
+  --code-bg:     oklch(18% 0.01 250);
+  --hover-bg:    oklch(20% 0.02 220 / 0.4);
+  --toggle-bg:   oklch(22% 0.01 250);
+  color-scheme: dark;
 }}
 
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif; }}
+/* ── Semantic tokens: light theme ──────────────────────────── */
+[data-theme="light"] {{
+  --bg:          oklch(97% 0.008 60);
+  --surface-1:   oklch(100% 0.003 60);
+  --surface-2:   oklch(95% 0.008 60);
+  --border:      oklch(85% 0.01 60);
+  --border-sub:  oklch(90% 0.008 60);
 
-.dashboard {{ max-width:1440px; margin:0 auto; padding:28px 32px; }}
+  --text-1:      oklch(18% 0.01 60);
+  --text-2:      oklch(40% 0.02 60);
+  --text-3:      oklch(55% 0.02 60);
 
-/* Header */
-.header {{ display:flex; align-items:baseline; gap:16px; margin-bottom:8px; }}
-.header h1 {{ font-size:24px; font-weight:700; letter-spacing:-0.5px; }}
-.header .period {{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--text-3); background:var(--surface); padding:4px 10px; border-radius:6px; }}
-.generated {{ font-size:12px; color:var(--text-3); margin-bottom:28px; }}
+  --accent:      oklch(50% 0.16 220);
+  --accent-dim:  oklch(50% 0.16 220 / 0.08);
+  --success:     oklch(48% 0.14 155);
+  --success-dim: oklch(48% 0.14 155 / 0.08);
+  --warn:        oklch(55% 0.14 75);
+  --warn-dim:    oklch(55% 0.14 75 / 0.08);
+  --error:       oklch(52% 0.18 25);
+  --muted:       oklch(48% 0.08 280);
+  --muted-dim:   oklch(48% 0.08 280 / 0.08);
 
-/* KPI strip */
-.kpi-strip {{ display:grid; grid-template-columns:repeat(7, 1fr); gap:12px; margin-bottom:28px; }}
-.kpi {{ background:var(--surface); border:1px solid var(--border-subtle); border-radius:var(--radius); padding:16px 18px; position:relative; overflow:hidden; }}
-.kpi::before {{ content:''; position:absolute; top:0; left:0; right:0; height:2px; }}
-.kpi.cost::before {{ background:linear-gradient(90deg, var(--green), var(--teal)); }}
-.kpi.tokens::before {{ background:linear-gradient(90deg, var(--blue), var(--cyan)); }}
-.kpi.sessions::before {{ background:linear-gradient(90deg, var(--amber), var(--orange)); }}
-.kpi.cache::before {{ background:linear-gradient(90deg, var(--purple), var(--pink)); }}
-.kpi.avg::before {{ background:linear-gradient(90deg, var(--teal), var(--green)); }}
-.kpi .label {{ font-size:11px; font-weight:500; color:var(--text-3); text-transform:uppercase; letter-spacing:0.8px; margin-bottom:6px; }}
-.kpi .value {{ font-family:'JetBrains Mono',monospace; font-size:22px; font-weight:600; }}
-.kpi .sub {{ font-size:11px; color:var(--text-3); margin-top:4px; font-family:'JetBrains Mono',monospace; }}
+  --chart-grid:  oklch(90% 0.008 60);
+  --chart-text:  oklch(50% 0.02 60);
 
-/* Chart grid */
-.chart-grid {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px; }}
-.chart-panel {{ background:var(--surface); border:1px solid var(--border-subtle); border-radius:var(--radius); padding:18px; }}
-.chart-panel h3 {{ font-size:12px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.8px; margin-bottom:14px; }}
-.span-2 {{ grid-column: span 2; }}
-.span-3 {{ grid-column: span 3; }}
+  --body-weight: 420;
+  --code-bg:     oklch(94% 0.008 60);
+  --hover-bg:    oklch(50% 0.16 220 / 0.04);
+  --toggle-bg:   oklch(92% 0.008 60);
+  color-scheme: light;
+}}
 
-/* Tables */
-.table-panel {{ background:var(--surface); border:1px solid var(--border-subtle); border-radius:var(--radius); padding:18px; margin-bottom:16px; }}
-.table-panel h3 {{ font-size:12px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.8px; margin-bottom:14px; }}
-.scroll-x {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; font-size:12px; font-family:'JetBrains Mono',monospace; white-space:nowrap; }}
-th {{ text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); color:var(--text-3); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; }}
-td {{ padding:7px 10px; border-bottom:1px solid var(--border-subtle); }}
-tr:hover td {{ background:rgba(96,165,250,0.04); }}
-td.num {{ text-align:right; font-variant-numeric:tabular-nums; }}
-td.cost-cell {{ color:var(--green); font-weight:500; }}
-code {{ background:var(--surface-2); padding:2px 6px; border-radius:4px; font-size:11px; font-family:'JetBrains Mono',monospace; }}
+/* ── Reset & base ──────────────────────────────────────────── */
+*, *::before, *::after {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-weight: var(--body-weight);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}}
 
-/* Provider badges */
-.badge {{ display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px; }}
-.badge.claude {{ background:rgba(96,165,250,0.15); color:var(--blue); }}
-.badge.opencode {{ background:rgba(74,222,128,0.15); color:var(--green); }}
-.badge.codex {{ background:rgba(251,191,36,0.15); color:var(--amber); }}
+/* ── Layout ────────────────────────────────────────────────── */
+.dash {{ max-width: 1400px; margin: 0 auto; padding: 32px 28px; }}
 
-/* Token composition bar */
-.token-bar {{ display:flex; height:8px; border-radius:4px; overflow:hidden; min-width:60px; background:var(--surface-2); }}
-.bar-in {{ background:var(--blue); }}
-.bar-out {{ background:var(--amber); }}
-.bar-cache {{ background:var(--purple); opacity:0.6; }}
+/* ── Header ────────────────────────────────────────────────── */
+.hdr {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }}
+.hdr-left {{ display:flex; align-items:baseline; gap:14px; }}
+.hdr h1 {{ font-size:1.4rem; font-weight:700; letter-spacing:-0.03em; }}
+.hdr .tag {{
+  font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:500;
+  color:var(--text-3); background:var(--surface-1); padding:3px 10px; border-radius:5px;
+  border:1px solid var(--border-sub);
+}}
+.meta {{ font-size:0.75rem; color:var(--text-3); margin-bottom:32px; }}
 
-/* Footer */
-.footer {{ text-align:center; color:var(--text-3); font-size:11px; padding:20px 0 8px; }}
-.footer a {{ color:var(--blue); text-decoration:none; }}
+/* ── Theme toggle ──────────────────────────────────────────── */
+.theme-toggle {{
+  appearance:none; border:none; cursor:pointer;
+  background:var(--toggle-bg); border-radius:6px; padding:6px 10px;
+  font-family:'Instrument Sans',system-ui; font-size:0.75rem; font-weight:500;
+  color:var(--text-2); border:1px solid var(--border-sub);
+  transition: background 0.2s, color 0.2s;
+}}
+.theme-toggle:hover {{ color:var(--text-1); }}
 
-@media (max-width:1024px) {{
-  .kpi-strip {{ grid-template-columns:repeat(4, 1fr); }}
-  .chart-grid {{ grid-template-columns:1fr; }}
-  .span-2, .span-3 {{ grid-column:span 1; }}
+/* ── KPI row ───────────────────────────────────────────────── */
+.kpis {{ display:grid; grid-template-columns:repeat(7,1fr); gap:10px; margin-bottom:28px; }}
+.kpi {{
+  background:var(--surface-1); border:1px solid var(--border-sub); border-radius:8px;
+  padding:14px 16px; border-left:3px solid transparent;
+}}
+.kpi.k-cost   {{ border-left-color:var(--success); }}
+.kpi.k-tok    {{ border-left-color:var(--accent); }}
+.kpi.k-sess   {{ border-left-color:var(--warn); }}
+.kpi.k-avg    {{ border-left-color:var(--success); }}
+.kpi.k-cache  {{ border-left-color:var(--muted); }}
+.kpi.k-model  {{ border-left-color:var(--accent); }}
+.kpi .lbl {{ font-size:0.65rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px; }}
+.kpi .val {{ font-family:'JetBrains Mono',monospace; font-size:1.25rem; font-weight:600; }}
+.kpi .sub {{ font-family:'JetBrains Mono',monospace; font-size:0.65rem; color:var(--text-3); margin-top:3px; }}
+
+/* ── Chart panels ──────────────────────────────────────────── */
+.grid {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:14px; }}
+.panel {{
+  background:var(--surface-1); border:1px solid var(--border-sub);
+  border-radius:8px; padding:16px;
+}}
+.panel h3 {{ font-size:0.7rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }}
+.c2 {{ grid-column:span 2; }}
+.c3 {{ grid-column:span 3; }}
+
+/* ── Tables ────────────────────────────────────────────────── */
+.tbl-wrap {{ background:var(--surface-1); border:1px solid var(--border-sub); border-radius:8px; padding:16px; margin-bottom:14px; }}
+.tbl-wrap h3 {{ font-size:0.7rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }}
+.scroll {{ overflow-x:auto; }}
+table {{ width:100%; border-collapse:collapse; font-size:0.75rem; white-space:nowrap; }}
+th {{
+  text-align:left; padding:7px 10px; border-bottom:1px solid var(--border);
+  font-size:0.62rem; font-weight:600; color:var(--text-3);
+  text-transform:uppercase; letter-spacing:0.04em;
+}}
+td {{ padding:6px 10px; border-bottom:1px solid var(--border-sub); }}
+tr:hover td {{ background:var(--hover-bg); }}
+.num {{ text-align:right; font-variant-numeric:tabular-nums; font-family:'JetBrains Mono',monospace; }}
+.cost-val {{ color:var(--success); font-weight:500; font-family:'JetBrains Mono',monospace; }}
+code {{
+  background:var(--code-bg); padding:2px 6px; border-radius:3px;
+  font-size:0.68rem; font-family:'JetBrains Mono',monospace;
+}}
+
+/* ── Badges ────────────────────────────────────────────────── */
+.badge {{
+  display:inline-block; padding:1px 7px; border-radius:3px;
+  font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.03em;
+}}
+.badge-claude  {{ background:var(--accent-dim); color:var(--accent); }}
+.badge-opencode {{ background:var(--success-dim); color:var(--success); }}
+.badge-codex   {{ background:var(--warn-dim); color:var(--warn); }}
+
+/* ── Token composition bar ─────────────────────────────────── */
+.comp-bar {{ display:flex; height:6px; border-radius:3px; overflow:hidden; min-width:56px; background:var(--surface-2); }}
+.seg-in    {{ background:var(--accent); }}
+.seg-out   {{ background:var(--warn); }}
+.seg-cache {{ background:var(--muted); opacity:0.65; }}
+
+/* ── Footer ────────────────────────────────────────────────── */
+.foot {{ text-align:center; color:var(--text-3); font-size:0.68rem; padding:20px 0 6px; }}
+.foot a {{ color:var(--accent); text-decoration:none; }}
+
+/* ── Responsive ────────────────────────────────────────────── */
+@media (max-width:1100px) {{
+  .kpis {{ grid-template-columns:repeat(4,1fr); }}
+  .grid {{ grid-template-columns:1fr; }}
+  .c2,.c3 {{ grid-column:span 1; }}
 }}
 @media (max-width:640px) {{
-  .kpi-strip {{ grid-template-columns:repeat(2, 1fr); }}
-  .dashboard {{ padding:16px; }}
+  .kpis {{ grid-template-columns:repeat(2,1fr); }}
+  .dash {{ padding:16px 12px; }}
 }}
 </style>
 </head>
 <body>
-<div class="dashboard">
+<div class="dash">
 
-  <div class="header">
-    <h1>Voyage</h1>
-    <span class="period">{days}d window</span>
+  <div class="hdr">
+    <div class="hdr-left">
+      <h1>Voyage</h1>
+      <span class="tag">{days}d</span>
+    </div>
+    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">Light</button>
   </div>
-  <div class="generated">{now} &middot; {provider_count} provider(s) &middot; {project_count} project(s)</div>
+  <div class="meta">{now} &middot; {provider_count} provider(s) &middot; {project_count} project(s)</div>
 
-  <!-- KPI Strip -->
-  <div class="kpi-strip">
-    <div class="kpi cost">
-      <div class="label">Total Cost</div>
-      <div class="value">${cost:.2}</div>
-      <div class="sub">{cost_per_day}/day</div>
-    </div>
-    <div class="kpi tokens">
-      <div class="label">Total Tokens</div>
-      <div class="value">{total_tokens_fmt}</div>
-      <div class="sub">{input_fmt} in / {output_fmt} out</div>
-    </div>
-    <div class="kpi sessions">
-      <div class="label">Sessions</div>
-      <div class="value">{session_count}</div>
-      <div class="sub">{total_turns} turns</div>
-    </div>
-    <div class="kpi avg">
-      <div class="label">Avg/Session</div>
-      <div class="value">${avg_cost:.4}</div>
-      <div class="sub">{avg_tokens}/session</div>
-    </div>
-    <div class="kpi cache">
-      <div class="label">Cache Read</div>
-      <div class="value">{cache_read_fmt}</div>
-      <div class="sub">{cache_hit_rate:.1}% hit rate</div>
-    </div>
-    <div class="kpi cache">
-      <div class="label">Cache Write</div>
-      <div class="value">{cache_write_fmt}</div>
-    </div>
-    <div class="kpi tokens">
-      <div class="label">Models</div>
-      <div class="value">{model_count}</div>
-      <div class="sub">{top_model}</div>
-    </div>
+  <div class="kpis">
+    <div class="kpi k-cost"><div class="lbl">Total Cost</div><div class="val">${cost:.2}</div><div class="sub">{cost_per_day}/day</div></div>
+    <div class="kpi k-tok"><div class="lbl">Total Tokens</div><div class="val">{total_tokens_fmt}</div><div class="sub">{input_fmt} in / {output_fmt} out</div></div>
+    <div class="kpi k-sess"><div class="lbl">Sessions</div><div class="val">{session_count}</div><div class="sub">{total_turns} turns</div></div>
+    <div class="kpi k-avg"><div class="lbl">Avg / Session</div><div class="val">${avg_cost:.4}</div><div class="sub">{avg_tokens} tokens</div></div>
+    <div class="kpi k-cache"><div class="lbl">Cache Read</div><div class="val">{cache_read_fmt}</div><div class="sub">{cache_hit_rate:.1}% hit rate</div></div>
+    <div class="kpi k-cache"><div class="lbl">Cache Write</div><div class="val">{cache_write_fmt}</div></div>
+    <div class="kpi k-model"><div class="lbl">Models</div><div class="val">{model_count}</div><div class="sub">{top_model}</div></div>
   </div>
 
-  <!-- Charts Row 1: Daily trends -->
-  <div class="chart-grid">
-    <div class="chart-panel span-2">
-      <h3>Daily Cost &amp; Sessions</h3>
-      <canvas id="dailyCostChart" height="100"></canvas>
-    </div>
-    <div class="chart-panel">
-      <h3>Token Composition</h3>
-      <canvas id="tokenBreakdownChart"></canvas>
-    </div>
+  <div class="grid">
+    <div class="panel c2"><h3>Daily Cost &amp; Sessions</h3><canvas id="cDaily" height="100"></canvas></div>
+    <div class="panel"><h3>Token Composition</h3><canvas id="cTokens"></canvas></div>
+  </div>
+  <div class="grid">
+    <div class="panel"><h3>Cost by Model</h3><canvas id="cModel"></canvas></div>
+    <div class="panel"><h3>Cost by Provider</h3><canvas id="cProvider"></canvas></div>
+    <div class="panel"><h3>Cost by Project</h3><canvas id="cProject"></canvas></div>
+  </div>
+  <div class="grid">
+    <div class="panel c3"><h3>Daily Token Volume (K)</h3><canvas id="cVolume" height="70"></canvas></div>
   </div>
 
-  <!-- Charts Row 2: Breakdowns -->
-  <div class="chart-grid">
-    <div class="chart-panel">
-      <h3>Cost by Model</h3>
-      <canvas id="modelCostChart"></canvas>
-    </div>
-    <div class="chart-panel">
-      <h3>Cost by Provider</h3>
-      <canvas id="providerChart"></canvas>
-    </div>
-    <div class="chart-panel">
-      <h3>Cost by Project (Top 10)</h3>
-      <canvas id="projectChart"></canvas>
-    </div>
-  </div>
+  <div class="tbl-wrap"><h3>Projects</h3><div class="scroll">
+    <table><thead><tr><th>Project</th><th>Sessions</th><th>Turns</th><th>Tokens</th><th>Cost</th><th>Avg/Sess</th></tr></thead>
+    <tbody>{project_detail_rows}</tbody></table>
+  </div></div>
 
-  <!-- Charts Row 3: Token volume -->
-  <div class="chart-grid">
-    <div class="chart-panel span-3">
-      <h3>Daily Token Volume (K) &mdash; Input vs Output</h3>
-      <canvas id="dailyTokenChart" height="70"></canvas>
-    </div>
-  </div>
+  <div class="tbl-wrap"><h3>Sessions ({session_count})</h3><div class="scroll">
+    <table><thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Model</th><th>Date</th><th>Msgs</th><th>Turns</th><th>Tokens</th><th>Mix</th><th>Cost</th></tr></thead>
+    <tbody>{session_table}</tbody></table>
+  </div></div>
 
-  <!-- Project detail table -->
-  <div class="table-panel">
-    <h3>Projects</h3>
-    <div class="scroll-x">
-    <table>
-      <thead><tr><th>Project</th><th>Sessions</th><th>Turns</th><th>Tokens</th><th>Cost</th><th>Avg/Session</th></tr></thead>
-      <tbody>{project_detail_rows}</tbody>
-    </table>
-    </div>
-  </div>
-
-  <!-- Session table -->
-  <div class="table-panel">
-    <h3>Sessions ({session_count})</h3>
-    <div class="scroll-x">
-    <table>
-      <thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Model</th><th>Date</th><th>Msgs</th><th>Turns</th><th>Tokens</th><th>Composition</th><th>Cost</th></tr></thead>
-      <tbody>{session_table}</tbody>
-    </table>
-    </div>
-  </div>
-
-  <div class="footer">Generated by <a href="https://github.com/coldinke/Voyage">Voyage</a> v0.1.0</div>
+  <div class="foot">Generated by <a href="https://github.com/coldinke/Voyage">Voyage</a> v0.1.0</div>
 </div>
 
 <script>
-const C = {{
-  blue:'#60a5fa', green:'#4ade80', amber:'#fbbf24', red:'#f87171',
-  purple:'#c084fc', cyan:'#22d3ee', teal:'#2dd4bf', pink:'#f472b6', orange:'#fb923c',
-  surface:'#27272a', text3:'#71717a', border:'#3f3f46'
-}};
-Chart.defaults.color = C.text3;
-Chart.defaults.borderColor = '#27272a';
-Chart.defaults.font.family = "'JetBrains Mono','Inter',system-ui";
-Chart.defaults.font.size = 11;
-const doughnutOpts = {{ cutout:'65%', plugins:{{ legend:{{ position:'bottom', labels:{{ padding:12, usePointStyle:true, pointStyle:'circle' }} }} }} }};
+// ── Theme management ─────────────────────────────────────────
+function getTheme() {{ return document.documentElement.getAttribute('data-theme') || 'dark'; }}
+function setTheme(t) {{
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('themeBtn').textContent = t === 'dark' ? 'Light' : 'Dark';
+  try {{ localStorage.setItem('voyage-theme', t); }} catch(e) {{}}
+  refreshCharts();
+}}
+function toggleTheme() {{ setTheme(getTheme() === 'dark' ? 'light' : 'dark'); }}
+// Restore saved preference
+try {{
+  const saved = localStorage.getItem('voyage-theme');
+  if (saved) setTheme(saved);
+  else if (window.matchMedia('(prefers-color-scheme: light)').matches) setTheme('light');
+}} catch(e) {{}}
 
-// Daily Cost & Sessions (dual axis)
-new Chart(document.getElementById('dailyCostChart'), {{
-  type:'bar',
-  data:{{
-    labels:[{daily_labels}],
-    datasets:[
-      {{ label:'Cost ($)', data:[{daily_costs}], backgroundColor:C.green+'99', borderRadius:4, yAxisID:'y', order:2 }},
-      {{ label:'Sessions', data:[{daily_sessions}], type:'line', borderColor:C.amber, backgroundColor:C.amber+'33', pointRadius:3, pointBackgroundColor:C.amber, tension:0.3, yAxisID:'y1', order:1, fill:true }},
-      {{ label:'Turns', data:[{daily_turns}], type:'line', borderColor:C.cyan, borderDash:[4,4], pointRadius:0, tension:0.3, yAxisID:'y1', order:0 }}
-    ]
-  }},
-  options:{{
-    interaction:{{ mode:'index', intersect:false }},
-    scales:{{
-      y:{{ position:'left', grid:{{ color:'#27272a' }}, ticks:{{ callback:v=>'$'+v }} }},
-      y1:{{ position:'right', grid:{{ display:false }}, ticks:{{ stepSize:1 }} }},
-      x:{{ grid:{{ display:false }} }}
+// ── Palette (theme-aware) ────────────────────────────────────
+function P() {{
+  const dark = getTheme() === 'dark';
+  return {{
+    accent:   dark ? '#5ba3d9' : '#2e7ab8',
+    success:  dark ? '#4cb87a' : '#2d8a56',
+    warn:     dark ? '#c9a84c' : '#9a7c2e',
+    error:    dark ? '#c85a5a' : '#a33a3a',
+    muted:    dark ? '#8a7cc8' : '#6a5caa',
+    teal:     dark ? '#49b8a8' : '#2d8a7a',
+    grid:     dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+    text:     dark ? '#7a8599' : '#6b7280',
+    border:   dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
+  }};
+}}
+
+// ── Chart instances (for re-creation on theme switch) ────────
+let charts = [];
+function destroyCharts() {{ charts.forEach(c => c.destroy()); charts = []; }}
+
+function refreshCharts() {{
+  destroyCharts();
+  const p = P();
+  Chart.defaults.color = p.text;
+  Chart.defaults.borderColor = p.border;
+  Chart.defaults.font.family = "'JetBrains Mono','Instrument Sans',system-ui";
+  Chart.defaults.font.size = 11;
+
+  const donut = {{ cutout:'62%', plugins:{{ legend:{{ position:'bottom', labels:{{ padding:10, usePointStyle:true, pointStyle:'circle' }} }} }} }};
+
+  // Daily Cost + Sessions
+  charts.push(new Chart(document.getElementById('cDaily'), {{
+    type:'bar',
+    data:{{
+      labels:[{daily_labels}],
+      datasets:[
+        {{ label:'Cost ($)', data:[{daily_costs}], backgroundColor:p.success+'aa', borderRadius:3, yAxisID:'y', order:2 }},
+        {{ label:'Sessions', data:[{daily_sessions}], type:'line', borderColor:p.warn, backgroundColor:p.warn+'22', pointRadius:2.5, pointBackgroundColor:p.warn, tension:0.35, yAxisID:'y1', order:1, fill:true }},
+        {{ label:'Turns', data:[{daily_turns}], type:'line', borderColor:p.teal, borderDash:[3,3], pointRadius:0, tension:0.35, yAxisID:'y1', order:0 }}
+      ]
     }},
-    plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:12 }} }} }}
-  }}
-}});
+    options:{{
+      interaction:{{ mode:'index', intersect:false }},
+      scales:{{
+        y:{{ position:'left', grid:{{ color:p.grid }}, ticks:{{ callback:v=>'$'+v }} }},
+        y1:{{ position:'right', grid:{{ display:false }}, ticks:{{ stepSize:1 }} }},
+        x:{{ grid:{{ display:false }} }}
+      }},
+      plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:10 }} }} }}
+    }}
+  }}));
 
-// Token Composition (doughnut)
-new Chart(document.getElementById('tokenBreakdownChart'), {{
-  type:'doughnut',
-  data:{{
-    labels:[{token_breakdown_labels}],
-    datasets:[{{ data:[{token_breakdown_data}], backgroundColor:[C.blue,C.amber,C.purple,C.pink], borderWidth:0 }}]
-  }},
-  options:doughnutOpts
-}});
-
-// Cost by Model (doughnut)
-new Chart(document.getElementById('modelCostChart'), {{
-  type:'doughnut',
-  data:{{
-    labels:[{model_labels}],
-    datasets:[{{ data:[{model_costs}], backgroundColor:[C.blue,C.green,C.amber,C.red,C.purple,C.cyan,C.teal,C.pink,C.orange], borderWidth:0 }}]
-  }},
-  options:doughnutOpts
-}});
-
-// Cost by Provider (doughnut)
-new Chart(document.getElementById('providerChart'), {{
-  type:'doughnut',
-  data:{{
-    labels:[{provider_labels}],
-    datasets:[{{ data:[{provider_costs}], backgroundColor:[C.blue,C.green,C.amber,C.red,C.purple], borderWidth:0 }}]
-  }},
-  options:doughnutOpts
-}});
-
-// Cost by Project (horizontal bar)
-new Chart(document.getElementById('projectChart'), {{
-  type:'bar',
-  data:{{
-    labels:[{proj_labels}],
-    datasets:[{{ label:'Cost ($)', data:[{proj_costs}], backgroundColor:C.blue+'bb', borderRadius:4 }}]
-  }},
-  options:{{
-    indexAxis:'y',
-    plugins:{{ legend:{{ display:false }} }},
-    scales:{{ x:{{ grid:{{ color:'#27272a' }}, ticks:{{ callback:v=>'$'+v }} }}, y:{{ grid:{{ display:false }} }} }}
-  }}
-}});
-
-// Daily Token Volume (stacked bar)
-new Chart(document.getElementById('dailyTokenChart'), {{
-  type:'bar',
-  data:{{
-    labels:[{daily_labels}],
-    datasets:[
-      {{ label:'Input (K)', data:[{daily_input}], backgroundColor:C.blue+'99', borderRadius:2 }},
-      {{ label:'Output (K)', data:[{daily_output}], backgroundColor:C.amber+'99', borderRadius:2 }}
-    ]
-  }},
-  options:{{
-    scales:{{
-      x:{{ stacked:true, grid:{{ display:false }} }},
-      y:{{ stacked:true, grid:{{ color:'#27272a' }}, ticks:{{ callback:v=>v+'K' }} }}
+  // Token breakdown
+  charts.push(new Chart(document.getElementById('cTokens'), {{
+    type:'doughnut',
+    data:{{
+      labels:[{token_breakdown_labels}],
+      datasets:[{{ data:[{token_breakdown_data}], backgroundColor:[p.accent,p.warn,p.muted,p.teal], borderWidth:0 }}]
     }},
-    plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:12 }} }} }}
-  }}
-}});
+    options:donut
+  }}));
+
+  // Model
+  charts.push(new Chart(document.getElementById('cModel'), {{
+    type:'doughnut',
+    data:{{
+      labels:[{model_labels}],
+      datasets:[{{ data:[{model_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}]
+    }},
+    options:donut
+  }}));
+
+  // Provider
+  charts.push(new Chart(document.getElementById('cProvider'), {{
+    type:'doughnut',
+    data:{{
+      labels:[{provider_labels}],
+      datasets:[{{ data:[{provider_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted], borderWidth:0 }}]
+    }},
+    options:donut
+  }}));
+
+  // Project bar
+  charts.push(new Chart(document.getElementById('cProject'), {{
+    type:'bar',
+    data:{{
+      labels:[{proj_labels}],
+      datasets:[{{ label:'Cost ($)', data:[{proj_costs}], backgroundColor:p.accent+'bb', borderRadius:3 }}]
+    }},
+    options:{{
+      indexAxis:'y',
+      plugins:{{ legend:{{ display:false }} }},
+      scales:{{ x:{{ grid:{{ color:p.grid }}, ticks:{{ callback:v=>'$'+v }} }}, y:{{ grid:{{ display:false }} }} }}
+    }}
+  }}));
+
+  // Daily token volume
+  charts.push(new Chart(document.getElementById('cVolume'), {{
+    type:'bar',
+    data:{{
+      labels:[{daily_labels}],
+      datasets:[
+        {{ label:'Input (K)', data:[{daily_input}], backgroundColor:p.accent+'99', borderRadius:2 }},
+        {{ label:'Output (K)', data:[{daily_output}], backgroundColor:p.warn+'99', borderRadius:2 }}
+      ]
+    }},
+    options:{{
+      scales:{{
+        x:{{ stacked:true, grid:{{ display:false }} }},
+        y:{{ stacked:true, grid:{{ color:p.grid }}, ticks:{{ callback:v=>v+'K' }} }}
+      }},
+      plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:10 }} }} }}
+    }}
+  }}));
+}}
+
+// Initial render
+refreshCharts();
 </script>
 </body>
 </html>"##,
@@ -473,26 +541,20 @@ new Chart(document.getElementById('dailyTokenChart'), {{
         cache_hit_rate = cache_hit_rate,
         model_count = by_model.len(),
         top_model = by_model.first().map(|m| m.model.as_str()).unwrap_or("-"),
-        // Daily
         daily_labels = daily_labels,
         daily_costs = daily_costs,
         daily_sessions = daily_sessions,
         daily_input = daily_input,
         daily_output = daily_output,
         daily_turns = daily_turns,
-        // Token breakdown
         token_breakdown_labels = token_breakdown_labels,
         token_breakdown_data = token_breakdown_data,
-        // Model
         model_labels = model_labels,
         model_costs = model_costs,
-        // Provider
         provider_labels = provider_labels,
         provider_costs = provider_costs,
-        // Project
         proj_labels = proj_labels,
         proj_costs = proj_costs,
-        // Tables
         project_detail_rows = project_detail_rows,
         session_table = session_rows,
     );
