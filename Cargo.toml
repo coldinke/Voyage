@@ -4,6 +4,7 @@ members = [
     "crates/voyage-core",
     "crates/voyage-parser",
     "crates/voyage-store",
+    "crates/voyage-embed",
     "crates/voyage-cli",
 ]
 
