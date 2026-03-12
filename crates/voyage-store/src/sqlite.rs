@@ -342,6 +342,84 @@ impl SqliteStore {
 
         Ok(stats)
     }
+
+    pub fn get_stats_by_provider(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<ProviderStats>, StoreError> {
+        let mut sql = String::from(
+            "SELECT provider,
+                    COALESCE(SUM(input_tokens + cache_read_tokens + cache_creation_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(estimated_cost_usd), 0.0),
+                    COUNT(*)
+             FROM sessions WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(since) = since {
+            sql.push_str(&format!(" AND started_at >= ?{}", param_values.len() + 1));
+            param_values.push(Box::new(since.to_rfc3339()));
+        }
+
+        sql.push_str(" GROUP BY provider ORDER BY SUM(estimated_cost_usd) DESC");
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let stats = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok(ProviderStats {
+                    provider: row.get(0)?,
+                    input_tokens: row.get::<_, i64>(1)? as u64,
+                    output_tokens: row.get::<_, i64>(2)? as u64,
+                    total_cost_usd: row.get(3)?,
+                    session_count: row.get::<_, i64>(4)? as u64,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(stats)
+    }
+
+    pub fn get_daily_stats(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<DailyStats>, StoreError> {
+        let mut sql = String::from(
+            "SELECT DATE(started_at) as day,
+                    COALESCE(SUM(input_tokens + cache_read_tokens + cache_creation_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(estimated_cost_usd), 0.0),
+                    COUNT(*),
+                    COALESCE(SUM(turn_count), 0)
+             FROM sessions WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(since) = since {
+            sql.push_str(&format!(" AND started_at >= ?{}", param_values.len() + 1));
+            param_values.push(Box::new(since.to_rfc3339()));
+        }
+
+        sql.push_str(" GROUP BY day ORDER BY day ASC");
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let stats = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok(DailyStats {
+                    date: row.get(0)?,
+                    input_tokens: row.get::<_, i64>(1)? as u64,
+                    output_tokens: row.get::<_, i64>(2)? as u64,
+                    total_cost_usd: row.get(3)?,
+                    session_count: row.get::<_, i64>(4)? as u64,
+                    turn_count: row.get::<_, i64>(5)? as u64,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(stats)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +439,25 @@ pub struct ModelStats {
     pub output_tokens: u64,
     pub total_cost_usd: f64,
     pub session_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderStats {
+    pub provider: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_cost_usd: f64,
+    pub session_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DailyStats {
+    pub date: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_cost_usd: f64,
+    pub session_count: u64,
+    pub turn_count: u64,
 }
 
 fn provider_to_str(p: Provider) -> &'static str {
