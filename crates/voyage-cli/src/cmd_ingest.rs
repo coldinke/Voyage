@@ -1,10 +1,65 @@
 use std::path::{Path, PathBuf};
 
+use voyage_core::model::Session;
+use voyage_core::model::Message;
 use voyage_parser::claude_code::ClaudeCodeParser;
 use voyage_parser::codex::CodexParser;
 use voyage_parser::opencode::OpenCodeParser;
 use voyage_parser::traits::SessionParser;
 use voyage_store::sqlite::SqliteStore;
+
+/// Outcome of comparing a parsed session against the store.
+enum Upsert {
+    New,
+    Updated { old_msgs: u32 },
+    Unchanged,
+    Empty,
+}
+
+fn classify(store: &SqliteStore, session: &Session) -> Result<Upsert, Box<dyn std::error::Error>> {
+    if session.message_count == 0 {
+        return Ok(Upsert::Empty);
+    }
+    match store.session_state(&session.id)? {
+        None => Ok(Upsert::New),
+        Some(old_msgs) if session.message_count > old_msgs => {
+            Ok(Upsert::Updated { old_msgs })
+        }
+        Some(_) => Ok(Upsert::Unchanged),
+    }
+}
+
+fn apply(
+    store: &mut SqliteStore,
+    session: &Session,
+    messages: &[Message],
+    filename: &str,
+    upsert: &Upsert,
+    counters: &mut (u32, u32, u32),
+) -> Result<(), Box<dyn std::error::Error>> {
+    match upsert {
+        Upsert::New => {
+            store.insert_session_with_messages(session, messages)?;
+            println!(
+                "  + {filename} ({} msgs, ${:.4})",
+                session.message_count, session.estimated_cost_usd,
+            );
+            counters.0 += 1;
+        }
+        Upsert::Updated { old_msgs } => {
+            store.insert_session_with_messages(session, messages)?;
+            println!(
+                "  ~ {filename} ({old_msgs} -> {} msgs, ${:.4})",
+                session.message_count, session.estimated_cost_usd,
+            );
+            counters.1 += 1;
+        }
+        Upsert::Unchanged | Upsert::Empty => {
+            counters.2 += 1;
+        }
+    }
+    Ok(())
+}
 
 pub fn run(
     db_path: &Path,
@@ -30,7 +85,6 @@ pub fn run(
             return Err(format!("Unknown provider: {other}. Use 'claude-code', 'opencode', or 'codex'").into());
         }
         None => {
-            // Ingest all providers with default paths
             let claude_dir = default_claude_dir();
             if claude_dir.is_dir() {
                 ingest_claude_code(&mut store, &claude_dir)?;
@@ -72,6 +126,20 @@ fn default_opencode_dir() -> PathBuf {
         .join("opencode/storage")
 }
 
+fn print_summary(label: &str, new: u32, updated: u32, skipped: u32, errors: u32) {
+    let parts: Vec<String> = [
+        (new, "new"),
+        (updated, "updated"),
+        (skipped, "unchanged"),
+        (errors, "errors"),
+    ]
+    .iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, l)| format!("{n} {l}"))
+    .collect();
+    println!("{label}: {}\n", if parts.is_empty() { "nothing to do".into() } else { parts.join(", ") });
+}
+
 fn ingest_claude_code(
     store: &mut SqliteStore,
     source: &Path,
@@ -90,47 +158,23 @@ fn ingest_claude_code(
     }
 
     println!("Found {} session file(s)", session_files.len());
-    let (mut ingested, mut skipped, mut errors) = (0u32, 0u32, 0u32);
+    let (mut counters, mut errors) = ((0u32, 0u32, 0u32), 0u32);
 
     for path in &session_files {
-        let session_id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|s| uuid::Uuid::parse_str(s).ok());
-
-        if let Some(id) = session_id {
-            if store.session_exists(&id)? {
-                skipped += 1;
-                continue;
-            }
-        }
-
         match parser.parse_session(path) {
             Ok((session, messages)) => {
-                if session.message_count == 0 {
-                    skipped += 1;
-                    continue;
-                }
-                store.insert_session_with_messages(&session, &messages)?;
-                println!(
-                    "  Ingested: {} ({} msgs, ${:.4})",
-                    path.file_name().unwrap_or_default().to_string_lossy(),
-                    session.message_count,
-                    session.estimated_cost_usd,
-                );
-                ingested += 1;
+                let upsert = classify(store, &session)?;
+                let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
             }
             Err(e) => {
-                eprintln!(
-                    "  Error: {}: {e}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                );
+                eprintln!("  Error: {}: {e}", path.file_name().unwrap_or_default().to_string_lossy());
                 errors += 1;
             }
         }
     }
 
-    println!("Claude Code: {ingested} ingested, {skipped} skipped, {errors} errors\n");
+    print_summary("Claude Code", counters.0, counters.1, counters.2, errors);
     Ok(())
 }
 
@@ -152,39 +196,23 @@ fn ingest_opencode(
     }
 
     println!("Found {} session file(s)", session_files.len());
-    let (mut ingested, mut skipped, mut errors) = (0u32, 0u32, 0u32);
+    let (mut counters, mut errors) = ((0u32, 0u32, 0u32), 0u32);
 
     for path in &session_files {
-        match parser.parse_session(&path, storage_root) {
+        match parser.parse_session(path, storage_root) {
             Ok((session, messages)) => {
-                if store.session_exists(&session.id)? {
-                    skipped += 1;
-                    continue;
-                }
-                if session.message_count == 0 {
-                    skipped += 1;
-                    continue;
-                }
-                store.insert_session_with_messages(&session, &messages)?;
-                println!(
-                    "  Ingested: {} ({} msgs, ${:.4})",
-                    path.file_name().unwrap_or_default().to_string_lossy(),
-                    session.message_count,
-                    session.estimated_cost_usd,
-                );
-                ingested += 1;
+                let upsert = classify(store, &session)?;
+                let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
             }
             Err(e) => {
-                eprintln!(
-                    "  Error: {}: {e}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                );
+                eprintln!("  Error: {}: {e}", path.file_name().unwrap_or_default().to_string_lossy());
                 errors += 1;
             }
         }
     }
 
-    println!("OpenCode: {ingested} ingested, {skipped} skipped, {errors} errors\n");
+    print_summary("OpenCode", counters.0, counters.1, counters.2, errors);
     Ok(())
 }
 
@@ -206,38 +234,22 @@ fn ingest_codex(
     }
 
     println!("Found {} session file(s)", session_files.len());
-    let (mut ingested, mut skipped, mut errors) = (0u32, 0u32, 0u32);
+    let (mut counters, mut errors) = ((0u32, 0u32, 0u32), 0u32);
 
     for path in &session_files {
         match parser.parse_session(path) {
             Ok((session, messages)) => {
-                if store.session_exists(&session.id)? {
-                    skipped += 1;
-                    continue;
-                }
-                if session.message_count == 0 {
-                    skipped += 1;
-                    continue;
-                }
-                store.insert_session_with_messages(&session, &messages)?;
-                println!(
-                    "  Ingested: {} ({} msgs, ${:.4})",
-                    path.file_name().unwrap_or_default().to_string_lossy(),
-                    session.message_count,
-                    session.estimated_cost_usd,
-                );
-                ingested += 1;
+                let upsert = classify(store, &session)?;
+                let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
             }
             Err(e) => {
-                eprintln!(
-                    "  Error: {}: {e}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                );
+                eprintln!("  Error: {}: {e}", path.file_name().unwrap_or_default().to_string_lossy());
                 errors += 1;
             }
         }
     }
 
-    println!("Codex: {ingested} ingested, {skipped} skipped, {errors} errors\n");
+    print_summary("Codex", counters.0, counters.1, counters.2, errors);
     Ok(())
 }

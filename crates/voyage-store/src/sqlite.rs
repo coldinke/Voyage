@@ -90,6 +90,21 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Returns (exists, message_count) for a session.
+    pub fn session_state(&self, id: &Uuid) -> Result<Option<u32>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT message_count FROM sessions WHERE id = ?1",
+        )?;
+        let result = stmt.query_row(params![id.to_string()], |row| {
+            Ok(row.get::<_, i64>(0)? as u32)
+        });
+        match result {
+            Ok(count) => Ok(Some(count)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Sqlite(e)),
+        }
+    }
+
     pub fn session_exists(&self, id: &Uuid) -> Result<bool, StoreError> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE id = ?1",
