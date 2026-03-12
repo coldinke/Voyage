@@ -44,13 +44,15 @@ enum RawRecord {
         session_id: Uuid,
         message: RawAssistantMessage,
         timestamp: DateTime<Utc>,
-        cwd: Option<String>,
     },
     #[serde(rename = "system")]
     System {
+        #[allow(dead_code)]
         subtype: Option<String>,
         #[serde(rename = "durationMs")]
+        #[allow(dead_code)]
         duration_ms: Option<u64>,
+        #[allow(dead_code)]
         timestamp: DateTime<Utc>,
     },
     #[serde(other)]

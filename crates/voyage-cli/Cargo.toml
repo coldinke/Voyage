@@ -1,0 +1,18 @@
+[package]
+name = "voyage-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "voyage"
+path = "src/main.rs"
+
+[dependencies]
+voyage-core = { path = "../voyage-core" }
+voyage-parser = { path = "../voyage-parser" }
+voyage-store = { path = "../voyage-store" }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+dirs-next = "2"
+uuid = { version = "1", features = ["v4"] }
