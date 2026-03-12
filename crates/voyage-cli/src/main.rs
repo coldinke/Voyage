@@ -1,6 +1,7 @@
 mod cmd_ingest;
-mod cmd_stats;
+mod cmd_report;
 mod cmd_session;
+mod cmd_stats;
 
 use std::path::PathBuf;
 
@@ -41,6 +42,18 @@ enum Commands {
     Session {
         #[command(subcommand)]
         action: SessionAction,
+    },
+    /// Generate an HTML visual report
+    Report {
+        /// Report period in days
+        #[arg(long, default_value = "30")]
+        days: u32,
+        /// Output file path (default: ./voyage-report.html)
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Open report in browser after generation
+        #[arg(long)]
+        open: bool,
     },
 }
 
@@ -101,6 +114,9 @@ fn main() {
                 project,
             } => cmd_session::run_list(&db_path, days, limit, project.as_deref()),
         },
+        Commands::Report { days, output, open } => {
+            cmd_report::run(&db_path, days, output.as_deref(), open)
+        }
     };
 
     if let Err(e) = result {
