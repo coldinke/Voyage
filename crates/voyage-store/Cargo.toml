@@ -1,0 +1,16 @@
+[package]
+name = "voyage-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+voyage-core = { path = "../voyage-core" }
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
