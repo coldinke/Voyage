@@ -367,6 +367,7 @@ fn provider_to_str(p: Provider) -> &'static str {
     match p {
         Provider::ClaudeCode => "claude_code",
         Provider::OpenCode => "opencode",
+        Provider::Codex => "codex",
     }
 }
 
@@ -374,6 +375,7 @@ fn str_to_provider(s: &str) -> Provider {
     match s {
         "claude_code" => Provider::ClaudeCode,
         "opencode" => Provider::OpenCode,
+        "codex" => Provider::Codex,
         _ => Provider::ClaudeCode,
     }
 }

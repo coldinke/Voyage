@@ -7,6 +7,7 @@ use uuid::Uuid;
 pub enum Provider {
     ClaudeCode,
     OpenCode,
+    Codex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +67,10 @@ fn cost_rates(model: &str) -> (f64, f64, f64, f64) {
         m if m.contains("opus") => (15.0, 75.0, 1.5, 18.75),
         m if m.contains("sonnet") => (3.0, 15.0, 0.3, 3.75),
         m if m.contains("haiku") => (0.8, 4.0, 0.08, 1.0),
+        // Codex models — pricing varies; using GPT-4o-class rates as estimate
+        m if m.contains("codex") || m.contains("gpt-5") => (2.5, 10.0, 1.25, 2.5),
+        m if m.contains("gpt-4o") => (2.5, 10.0, 1.25, 2.5),
+        m if m.contains("o3") || m.contains("o4") => (10.0, 40.0, 2.5, 10.0),
         _ => (10.0, 30.0, 1.0, 12.5), // conservative default
     }
 }

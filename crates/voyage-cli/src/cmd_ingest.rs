@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use voyage_parser::claude_code::ClaudeCodeParser;
+use voyage_parser::codex::CodexParser;
 use voyage_parser::opencode::OpenCodeParser;
 use voyage_parser::traits::SessionParser;
 use voyage_store::sqlite::SqliteStore;
@@ -21,8 +22,12 @@ pub fn run(
             let src = source.unwrap_or_else(default_opencode_dir);
             ingest_opencode(&mut store, &src)?;
         }
+        Some("codex") => {
+            let src = source.unwrap_or_else(default_codex_dir);
+            ingest_codex(&mut store, &src)?;
+        }
         Some(other) => {
-            return Err(format!("Unknown provider: {other}. Use 'claude-code' or 'opencode'").into());
+            return Err(format!("Unknown provider: {other}. Use 'claude-code', 'opencode', or 'codex'").into());
         }
         None => {
             // Ingest all providers with default paths
@@ -34,6 +39,10 @@ pub fn run(
             if opencode_dir.is_dir() {
                 ingest_opencode(&mut store, &opencode_dir)?;
             }
+            let codex_dir = default_codex_dir();
+            if codex_dir.is_dir() {
+                ingest_codex(&mut store, &codex_dir)?;
+            }
         }
     }
 
@@ -44,6 +53,16 @@ fn default_claude_dir() -> PathBuf {
     dirs_next::home_dir()
         .expect("Cannot determine home directory")
         .join(".claude/projects")
+}
+
+fn default_codex_dir() -> PathBuf {
+    std::env::var("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs_next::home_dir()
+                .expect("Cannot determine home directory")
+                .join(".codex")
+        })
 }
 
 fn default_opencode_dir() -> PathBuf {
@@ -166,5 +185,59 @@ fn ingest_opencode(
     }
 
     println!("OpenCode: {ingested} ingested, {skipped} skipped, {errors} errors\n");
+    Ok(())
+}
+
+fn ingest_codex(
+    store: &mut SqliteStore,
+    codex_home: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("=== Codex ===");
+    if !codex_home.is_dir() {
+        println!("Source not found: {}", codex_home.display());
+        return Ok(());
+    }
+
+    let parser = CodexParser::new();
+    let session_files = parser.discover_sessions(codex_home)?;
+    if session_files.is_empty() {
+        println!("No session files found in {}", codex_home.display());
+        return Ok(());
+    }
+
+    println!("Found {} session file(s)", session_files.len());
+    let (mut ingested, mut skipped, mut errors) = (0u32, 0u32, 0u32);
+
+    for path in &session_files {
+        match parser.parse_session(path) {
+            Ok((session, messages)) => {
+                if store.session_exists(&session.id)? {
+                    skipped += 1;
+                    continue;
+                }
+                if session.message_count == 0 {
+                    skipped += 1;
+                    continue;
+                }
+                store.insert_session_with_messages(&session, &messages)?;
+                println!(
+                    "  Ingested: {} ({} msgs, ${:.4})",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    session.message_count,
+                    session.estimated_cost_usd,
+                );
+                ingested += 1;
+            }
+            Err(e) => {
+                eprintln!(
+                    "  Error: {}: {e}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                );
+                errors += 1;
+            }
+        }
+    }
+
+    println!("Codex: {ingested} ingested, {skipped} skipped, {errors} errors\n");
     Ok(())
 }

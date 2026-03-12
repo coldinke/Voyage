@@ -35,7 +35,7 @@ fmt:
 fmt-check:
     cargo fmt -- --check
 
-# Ingest all providers (Claude Code + OpenCode)
+# Ingest all providers (Claude Code + OpenCode + Codex)
 ingest:
     cargo run -- ingest
 
@@ -46,6 +46,10 @@ ingest-claude:
 # Ingest OpenCode sessions only
 ingest-opencode:
     cargo run -- ingest --provider opencode
+
+# Ingest Codex sessions only
+ingest-codex:
+    cargo run -- ingest --provider codex
 
 # Show token usage stats (last N days, default 1)
 stats days="1":
