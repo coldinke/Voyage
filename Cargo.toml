@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/voyage-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
