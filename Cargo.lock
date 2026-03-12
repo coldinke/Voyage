@@ -2957,6 +2957,7 @@ dependencies = [
  "dirs-next",
  "uuid",
  "voyage-core",
+ "voyage-embed",
  "voyage-parser",
  "voyage-store",
 ]

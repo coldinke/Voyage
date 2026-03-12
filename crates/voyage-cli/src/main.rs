@@ -1,5 +1,7 @@
+mod cmd_index;
 mod cmd_ingest;
 mod cmd_report;
+mod cmd_search;
 mod cmd_session;
 mod cmd_stats;
 
@@ -54,6 +56,16 @@ enum Commands {
         /// Open report in browser after generation
         #[arg(long)]
         open: bool,
+    },
+    /// Build vector index from ingested sessions
+    Index,
+    /// Semantic search across sessions
+    Search {
+        /// Search query
+        query: String,
+        /// Maximum number of results
+        #[arg(long, default_value = "10")]
+        limit: usize,
     },
 }
 
@@ -117,6 +129,8 @@ fn main() {
         Commands::Report { days, output, open } => {
             cmd_report::run(&db_path, days, output.as_deref(), open)
         }
+        Commands::Index => cmd_index::run(&data_dir),
+        Commands::Search { query, limit } => cmd_search::run(&data_dir, &query, limit),
     };
 
     if let Err(e) = result {

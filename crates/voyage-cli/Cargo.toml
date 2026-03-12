@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 voyage-core = { path = "../voyage-core" }
+voyage-embed = { path = "../voyage-embed" }
 voyage-parser = { path = "../voyage-parser" }
 voyage-store = { path = "../voyage-store" }
 chrono = { version = "0.4", features = ["serde"] }
