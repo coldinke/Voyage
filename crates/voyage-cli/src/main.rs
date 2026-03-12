@@ -22,11 +22,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Ingest Claude Code session files into the local database
+    /// Ingest session files into the local database
     Ingest {
-        /// Path to Claude Code projects directory (default: ~/.claude/projects)
+        /// Source directory (defaults depend on provider)
         #[arg(long)]
         source: Option<PathBuf>,
+        /// Provider: claude-code or opencode (default: ingest all)
+        #[arg(long)]
+        provider: Option<String>,
     },
     /// Show token usage statistics
     Stats {
@@ -91,12 +94,6 @@ fn default_data_dir() -> PathBuf {
         .join(".voyage")
 }
 
-fn default_claude_projects_dir() -> PathBuf {
-    dirs_next::home_dir()
-        .expect("Cannot determine home directory")
-        .join(".claude")
-        .join("projects")
-}
 
 fn main() {
     let cli = Cli::parse();
@@ -110,9 +107,8 @@ fn main() {
     let db_path = data_dir.join("voyage.db");
 
     let result = match cli.command {
-        Commands::Ingest { source } => {
-            let source = source.unwrap_or_else(default_claude_projects_dir);
-            cmd_ingest::run(&db_path, &source)
+        Commands::Ingest { source, provider } => {
+            cmd_ingest::run(&db_path, source, provider.as_deref())
         }
         Commands::Stats {
             days,

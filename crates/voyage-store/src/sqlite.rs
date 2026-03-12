@@ -366,12 +366,14 @@ pub struct ModelStats {
 fn provider_to_str(p: Provider) -> &'static str {
     match p {
         Provider::ClaudeCode => "claude_code",
+        Provider::OpenCode => "opencode",
     }
 }
 
 fn str_to_provider(s: &str) -> Provider {
     match s {
         "claude_code" => Provider::ClaudeCode,
+        "opencode" => Provider::OpenCode,
         _ => Provider::ClaudeCode,
     }
 }

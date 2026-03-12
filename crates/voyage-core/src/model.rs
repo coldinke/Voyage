@@ -6,6 +6,7 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     ClaudeCode,
+    OpenCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
