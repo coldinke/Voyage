@@ -4,8 +4,7 @@ use uuid::Uuid;
 
 /// Namespace UUID for deterministic v5 IDs: `voyage-graph-entity`
 const ENTITY_NAMESPACE: Uuid = Uuid::from_bytes([
-    0x6b, 0x9f, 0x2a, 0x1e, 0x3c, 0x7d, 0x4f, 0x8a, 0xb5, 0xd1, 0xe2, 0xf4, 0x06, 0x18, 0x2a,
-    0x3c,
+    0x6b, 0x9f, 0x2a, 0x1e, 0x3c, 0x7d, 0x4f, 0x8a, 0xb5, 0xd1, 0xe2, 0xf4, 0x06, 0x18, 0x2a, 0x3c,
 ]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -26,14 +25,18 @@ impl MentionRole {
             Self::Unknown => "unknown",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for MentionRole {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "definition" => Self::Definition,
             "reference" => Self::Reference,
             "modification" => Self::Modification,
             _ => Self::Unknown,
-        }
+        })
     }
 }
 
@@ -70,20 +73,6 @@ impl EntityKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "file" => Some(Self::File),
-            "function" => Some(Self::Function),
-            "module" => Some(Self::Module),
-            "concept" => Some(Self::Concept),
-            "tool" => Some(Self::Tool),
-            "error" => Some(Self::Error),
-            "dependency" => Some(Self::Dependency),
-            "git_branch" => Some(Self::GitBranch),
-            _ => None,
-        }
-    }
-
     pub fn all() -> &'static [EntityKind] {
         &[
             Self::File,
@@ -104,6 +93,24 @@ impl std::fmt::Display for EntityKind {
     }
 }
 
+impl std::str::FromStr for EntityKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "file" => Ok(Self::File),
+            "function" => Ok(Self::Function),
+            "module" => Ok(Self::Module),
+            "concept" => Ok(Self::Concept),
+            "tool" => Ok(Self::Tool),
+            "error" => Ok(Self::Error),
+            "dependency" => Ok(Self::Dependency),
+            "git_branch" => Ok(Self::GitBranch),
+            _ => Err(format!("Unknown entity kind: {s}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
     pub id: Uuid,
@@ -119,7 +126,12 @@ pub struct Entity {
 }
 
 impl Entity {
-    pub fn new(kind: EntityKind, name: String, display_name: String, timestamp: DateTime<Utc>) -> Self {
+    pub fn new(
+        kind: EntityKind,
+        name: String,
+        display_name: String,
+        timestamp: DateTime<Utc>,
+    ) -> Self {
         Self {
             id: deterministic_id(kind, &name),
             kind,
@@ -174,7 +186,7 @@ mod tests {
     fn entity_kind_roundtrip() {
         for kind in EntityKind::all() {
             let s = kind.as_str();
-            let parsed = EntityKind::from_str(s).unwrap();
+            let parsed: EntityKind = s.parse().unwrap();
             assert_eq!(*kind, parsed);
         }
     }

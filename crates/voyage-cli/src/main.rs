@@ -216,16 +216,16 @@ fn main() {
             } else {
                 Some(Utc::now() - Duration::days(days as i64))
             };
-            cmd_stats::run(
-                &db_path,
+            cmd_stats::run(&cmd_stats::StatsOptions {
+                db_path: &db_path,
                 since,
                 days,
-                project.as_deref(),
+                project: project.as_deref(),
                 by_model,
                 daily,
                 blocks,
                 by_provider,
-            )
+            })
         }
         Commands::Session { action } => match action {
             SessionAction::List {
@@ -274,15 +274,9 @@ fn main() {
                 GraphAction::Related { name, limit } => {
                     cmd_graph::run_related(&graph_path, &name, limit)
                 }
-                GraphAction::Cost { name } => {
-                    cmd_graph::run_cost(&graph_path, &db_path, &name)
-                }
-                GraphAction::Timeline { name } => {
-                    cmd_graph::run_timeline(&graph_path, &name)
-                }
-                GraphAction::Rank { limit } => {
-                    cmd_graph::run_rank(&graph_path, limit)
-                }
+                GraphAction::Cost { name } => cmd_graph::run_cost(&graph_path, &db_path, &name),
+                GraphAction::Timeline { name } => cmd_graph::run_timeline(&graph_path, &name),
+                GraphAction::Rank { limit } => cmd_graph::run_rank(&graph_path, limit),
                 GraphAction::Communities { limit } => {
                     cmd_graph::run_communities(&graph_path, limit)
                 }

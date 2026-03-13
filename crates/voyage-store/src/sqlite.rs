@@ -791,10 +791,7 @@ impl SqliteStore {
     }
 
     /// Get message-level cost details for a session.
-    pub fn get_message_costs(
-        &self,
-        session_id: &Uuid,
-    ) -> Result<Vec<MessageCostRow>, StoreError> {
+    pub fn get_message_costs(&self, session_id: &Uuid) -> Result<Vec<MessageCostRow>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT timestamp, role, model, input_tokens, output_tokens,
                     cache_read_tokens, cache_creation_tokens, content

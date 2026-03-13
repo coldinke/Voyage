@@ -27,15 +27,19 @@ impl EdgeKind {
             Self::BranchContains => "branch_contains",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for EdgeKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "co_occurs" => Some(Self::CoOccurs),
-            "modifies" => Some(Self::Modifies),
-            "uses_tool" => Some(Self::UsesTool),
-            "depends_on" => Some(Self::DependsOn),
-            "branch_contains" => Some(Self::BranchContains),
-            _ => None,
+            "co_occurs" => Ok(Self::CoOccurs),
+            "modifies" => Ok(Self::Modifies),
+            "uses_tool" => Ok(Self::UsesTool),
+            "depends_on" => Ok(Self::DependsOn),
+            "branch_contains" => Ok(Self::BranchContains),
+            _ => Err(format!("Unknown edge kind: {s}")),
         }
     }
 }

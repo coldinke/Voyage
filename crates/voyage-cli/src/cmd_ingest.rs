@@ -63,8 +63,7 @@ fn apply(
             store.insert_session_with_messages(session, messages)?;
             if let Some(graph) = graph {
                 let entity_count =
-                    cmd_graph::extract_session_entities(graph, session, messages)
-                        .unwrap_or(0);
+                    cmd_graph::extract_session_entities(graph, session, messages).unwrap_or(0);
                 println!(
                     "  + {filename} ({} msgs, ${:.4}, {entity_count} entities)",
                     session.message_count, session.estimated_cost_usd,
@@ -81,8 +80,7 @@ fn apply(
             store.replace_session_with_messages(session, messages)?;
             if let Some(graph) = graph {
                 let entity_count =
-                    cmd_graph::extract_session_entities(graph, session, messages)
-                        .unwrap_or(0);
+                    cmd_graph::extract_session_entities(graph, session, messages).unwrap_or(0);
                 println!(
                     "  ~ {filename} ({} msgs, ${:.4}, {entity_count} entities)",
                     session.message_count, session.estimated_cost_usd,
@@ -347,9 +345,14 @@ fn ingest_opencode_json(
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                if let Err(e) =
-                    apply_with_context(store, Some(graph), &session, &messages, &label, &mut counters)
-                {
+                if let Err(e) = apply_with_context(
+                    store,
+                    Some(graph),
+                    &session,
+                    &messages,
+                    &label,
+                    &mut counters,
+                ) {
                     eprintln!("  Error: {label}: {e}");
                     errors += 1;
                 }
@@ -422,7 +425,9 @@ fn ingest_opencode_sqlite(
     let mut counters = (0u32, 0u32, 0u32);
     for (sid, (session, messages)) in &parsed {
         let label = if sid.len() > 8 { &sid[..8] } else { sid };
-        if let Err(e) = apply_with_context(store, Some(graph), session, messages, label, &mut counters) {
+        if let Err(e) =
+            apply_with_context(store, Some(graph), session, messages, label, &mut counters)
+        {
             eprintln!("  Error: {label}: {e}");
             errors += 1;
         }
@@ -462,9 +467,14 @@ fn ingest_codex(
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                if let Err(e) =
-                    apply_with_context(store, Some(graph), &session, &messages, &label, &mut counters)
-                {
+                if let Err(e) = apply_with_context(
+                    store,
+                    Some(graph),
+                    &session,
+                    &messages,
+                    &label,
+                    &mut counters,
+                ) {
                     eprintln!("  Error: {label}: {e}");
                     errors += 1;
                 }

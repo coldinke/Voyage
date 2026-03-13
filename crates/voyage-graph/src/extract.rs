@@ -75,11 +75,57 @@ const CONCEPTS: &[&str] = &[
 
 /// File extensions we recognize as valid source files.
 const VALID_EXTENSIONS: &[&str] = &[
-    "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "cs", "rb",
-    "php", "swift", "kt", "scala", "zig", "lua", "sh", "bash", "zsh", "fish", "yaml", "yml",
-    "toml", "json", "xml", "html", "css", "scss", "sass", "less", "sql", "md", "txt", "cfg",
-    "ini", "env", "lock", "mod", "sum", "gradle", "cmake", "make", "dockerfile", "proto",
-    "graphql", "svelte", "vue",
+    "rs",
+    "py",
+    "js",
+    "ts",
+    "tsx",
+    "jsx",
+    "go",
+    "java",
+    "c",
+    "cpp",
+    "h",
+    "hpp",
+    "cs",
+    "rb",
+    "php",
+    "swift",
+    "kt",
+    "scala",
+    "zig",
+    "lua",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "yaml",
+    "yml",
+    "toml",
+    "json",
+    "xml",
+    "html",
+    "css",
+    "scss",
+    "sass",
+    "less",
+    "sql",
+    "md",
+    "txt",
+    "cfg",
+    "ini",
+    "env",
+    "lock",
+    "mod",
+    "sum",
+    "gradle",
+    "cmake",
+    "make",
+    "dockerfile",
+    "proto",
+    "graphql",
+    "svelte",
+    "vue",
 ];
 
 /// Paths that indicate system/non-project files.
@@ -131,7 +177,12 @@ fn context_snippet(content: &str, start: usize, end: usize) -> String {
     snippet.replace('\n', " ").trim().to_string()
 }
 
-fn make_mention(entity: &Entity, ctx: &ExtractionContext, context: String, role: MentionRole) -> EntityMention {
+fn make_mention(
+    entity: &Entity,
+    ctx: &ExtractionContext,
+    context: String,
+    role: MentionRole,
+) -> EntityMention {
     EntityMention {
         entity_id: entity.id,
         session_id: ctx.session_id,
@@ -159,7 +210,10 @@ fn extract_file_paths(
         let raw_path = m.as_str();
 
         // Filter out excluded prefixes
-        if EXCLUDED_PATH_PREFIXES.iter().any(|p| raw_path.starts_with(p)) {
+        if EXCLUDED_PATH_PREFIXES
+            .iter()
+            .any(|p| raw_path.starts_with(p))
+        {
             continue;
         }
 
@@ -170,7 +224,12 @@ fn extract_file_paths(
         }
 
         // Filter out obvious non-paths (version numbers like v1.0, single-component dot files)
-        if raw_path.starts_with("v") && raw_path[1..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        if raw_path.starts_with("v")
+            && raw_path[1..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+        {
             continue;
         }
 
@@ -188,36 +247,46 @@ fn extract_file_paths(
         } else {
             MentionRole::Reference
         };
-        let mention = make_mention(&entity, ctx, context_snippet(content, m.start(), m.end()), role);
+        let mention = make_mention(
+            &entity,
+            ctx,
+            context_snippet(content, m.start(), m.end()),
+            role,
+        );
         out.push((entity, mention));
     }
 }
 
 fn extract_tools(ctx: &ExtractionContext, out: &mut Vec<(Entity, EntityMention)>) {
     for tool in &ctx.tool_calls {
-        let entity = Entity::new(
-            EntityKind::Tool,
-            tool.clone(),
-            tool.clone(),
-            ctx.timestamp,
+        let entity = Entity::new(EntityKind::Tool, tool.clone(), tool.clone(), ctx.timestamp);
+        let mention = make_mention(
+            &entity,
+            ctx,
+            format!("tool_call: {tool}"),
+            MentionRole::Reference,
         );
-        let mention = make_mention(&entity, ctx, format!("tool_call: {tool}"), MentionRole::Reference);
         out.push((entity, mention));
     }
 }
 
 fn extract_git_branch(ctx: &ExtractionContext, out: &mut Vec<(Entity, EntityMention)>) {
-    if let Some(branch) = &ctx.git_branch {
-        if !branch.is_empty() {
-            let entity = Entity::new(
-                EntityKind::GitBranch,
-                branch.clone(),
-                branch.clone(),
-                ctx.timestamp,
-            );
-            let mention = make_mention(&entity, ctx, format!("branch: {branch}"), MentionRole::Reference);
-            out.push((entity, mention));
-        }
+    if let Some(branch) = &ctx.git_branch
+        && !branch.is_empty()
+    {
+        let entity = Entity::new(
+            EntityKind::GitBranch,
+            branch.clone(),
+            branch.clone(),
+            ctx.timestamp,
+        );
+        let mention = make_mention(
+            &entity,
+            ctx,
+            format!("branch: {branch}"),
+            MentionRole::Reference,
+        );
+        out.push((entity, mention));
     }
 }
 
@@ -251,7 +320,11 @@ fn extract_functions(
             let bare_name = cap.get(1).unwrap().as_str();
 
             // Skip common noise: single-char names, all-caps constants, test helpers
-            if bare_name.len() <= 1 || bare_name == "self" || bare_name == "Self" || bare_name == "test" {
+            if bare_name.len() <= 1
+                || bare_name == "self"
+                || bare_name == "Self"
+                || bare_name == "test"
+            {
                 continue;
             }
 
@@ -272,8 +345,12 @@ fn extract_functions(
                 bare_name.to_string(),
                 ctx.timestamp,
             );
-            let mention =
-                make_mention(&entity, ctx, context_snippet(content, m.start(), m.end()), MentionRole::Definition);
+            let mention = make_mention(
+                &entity,
+                ctx,
+                context_snippet(content, m.start(), m.end()),
+                MentionRole::Definition,
+            );
             out.push((entity, mention));
         }
     }
@@ -306,10 +383,12 @@ fn extract_dependencies(
             // For Rust `use`, extract the top-level crate name
             let name = if *is_rust_use {
                 // Skip `use crate::` and `use self::` and `use super::`
-                if raw.starts_with("crate::") || raw.starts_with("self::") || raw.starts_with("super::") {
+                if raw.starts_with("crate::")
+                    || raw.starts_with("self::")
+                    || raw.starts_with("super::")
+                {
                     // Extract as module reference instead
-                    let module = raw.split("::").take(2).collect::<Vec<_>>().join("::");
-                    module
+                    raw.split("::").take(2).collect::<Vec<_>>().join("::")
                 } else {
                     raw.split("::").next().unwrap_or(raw).to_string()
                 }
@@ -328,24 +407,19 @@ fn extract_dependencies(
             }
 
             let m = cap.get(0).unwrap();
-            let entity = Entity::new(
-                EntityKind::Dependency,
-                name.clone(),
-                name,
-                ctx.timestamp,
+            let entity = Entity::new(EntityKind::Dependency, name.clone(), name, ctx.timestamp);
+            let mention = make_mention(
+                &entity,
+                ctx,
+                context_snippet(content, m.start(), m.end()),
+                MentionRole::Reference,
             );
-            let mention =
-                make_mention(&entity, ctx, context_snippet(content, m.start(), m.end()), MentionRole::Reference);
             out.push((entity, mention));
         }
     }
 }
 
-fn extract_errors(
-    content: &str,
-    ctx: &ExtractionContext,
-    out: &mut Vec<(Entity, EntityMention)>,
-) {
+fn extract_errors(content: &str, ctx: &ExtractionContext, out: &mut Vec<(Entity, EntityMention)>) {
     let patterns = [
         r"error\[E(\d{4})\]",
         r"panicked at '([^']+)'",
@@ -380,14 +454,13 @@ fn extract_errors(
             }
 
             let m = cap.get(0).unwrap();
-            let entity = Entity::new(
-                EntityKind::Error,
-                name.clone(),
-                name,
-                ctx.timestamp,
+            let entity = Entity::new(EntityKind::Error, name.clone(), name, ctx.timestamp);
+            let mention = make_mention(
+                &entity,
+                ctx,
+                context_snippet(content, m.start(), m.end()),
+                MentionRole::Unknown,
             );
-            let mention =
-                make_mention(&entity, ctx, context_snippet(content, m.start(), m.end()), MentionRole::Unknown);
             out.push((entity, mention));
         }
     }
@@ -581,7 +654,10 @@ mod tests {
             .filter(|(e, _)| e.kind == EntityKind::Concept)
             .map(|(e, _)| e.name.as_str())
             .collect();
-        assert!(concepts.contains(&"authentication"), "concepts: {concepts:?}");
+        assert!(
+            concepts.contains(&"authentication"),
+            "concepts: {concepts:?}"
+        );
         assert!(concepts.contains(&"caching"), "concepts: {concepts:?}");
     }
 

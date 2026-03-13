@@ -79,8 +79,8 @@ pub fn run_list(
 
     let entity_kind = match kind {
         Some(k) => Some(
-            EntityKind::from_str(k)
-                .ok_or_else(|| format!("Unknown entity kind: {k}. Valid: file, function, module, concept, tool, error, dependency, git_branch"))?,
+            k.parse::<EntityKind>()
+                .map_err(|_| format!("Unknown entity kind: {k}. Valid: file, function, module, concept, tool, error, dependency, git_branch"))?,
         ),
         None => None,
     };
@@ -147,8 +147,8 @@ pub fn run_mentions(
     let store = SqliteStore::open(db_path).ok();
 
     println!(
-        "  {:<10} {:<20} {:>8}  {}",
-        "SESSION", "DATE", "MENTIONS", "SUMMARY"
+        "  {:<10} {:<20} {:>8}  SUMMARY",
+        "SESSION", "DATE", "MENTIONS"
     );
     println!("  {}", "-".repeat(74));
 
@@ -254,10 +254,7 @@ pub fn run_related(
     }
 
     println!("=== Related to {name} (PMI) ===\n");
-    println!(
-        "  {:<14} {:<40} {:>8}",
-        "KIND", "NAME", "PMI"
-    );
+    println!("  {:<14} {:<40} {:>8}", "KIND", "NAME", "PMI");
     println!("  {}", "-".repeat(66));
 
     for (e, pmi) in &related {
@@ -301,7 +298,11 @@ pub fn run_cost(
         }
     }
 
-    println!("=== Cost for {} ({}) ===\n", entity.name, entity.kind.as_str());
+    println!(
+        "=== Cost for {} ({}) ===\n",
+        entity.name,
+        entity.kind.as_str()
+    );
     println!("  Sessions:      {session_count}");
     println!("  Total cost:    ${total_cost:.4}");
     println!("  Total tokens:  {}", format_tokens(total_tokens));
@@ -311,10 +312,7 @@ pub fn run_cost(
 }
 
 /// `voyage graph timeline <name>` — show activity timeline.
-pub fn run_timeline(
-    graph_path: &Path,
-    name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_timeline(graph_path: &Path, name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let graph = GraphStore::open(graph_path)?;
 
     let entity = graph.find_entity_by_name(name)?;
@@ -342,10 +340,7 @@ pub fn run_timeline(
 }
 
 /// `voyage graph rank` — compute and show PageRank rankings.
-pub fn run_rank(
-    graph_path: &Path,
-    limit: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_rank(graph_path: &Path, limit: usize) -> Result<(), Box<dyn std::error::Error>> {
     let graph = GraphStore::open(graph_path)?;
 
     // Recompute PageRank
@@ -379,10 +374,7 @@ pub fn run_rank(
 }
 
 /// `voyage graph communities` — show detected communities.
-pub fn run_communities(
-    graph_path: &Path,
-    limit: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_communities(graph_path: &Path, limit: usize) -> Result<(), Box<dyn std::error::Error>> {
     let graph = GraphStore::open(graph_path)?;
 
     // Recompute communities
@@ -402,7 +394,12 @@ pub fn run_communities(
             .first()
             .map(|e| e.name.as_str())
             .unwrap_or("unnamed");
-        println!("  Community {} — \"{}\" ({} members)", i + 1, label, members.len());
+        println!(
+            "  Community {} — \"{}\" ({} members)",
+            i + 1,
+            label,
+            members.len()
+        );
         for member in members.iter().take(10) {
             println!(
                 "    {:<14} {:<40} PR={:.4}",

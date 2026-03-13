@@ -73,15 +73,14 @@ pub fn run(
         std::collections::HashMap::new();
     for s in &sessions {
         let entry = project_map.entry(s.project.clone()).or_default();
-        entry.0 +=
-            s.usage.input_tokens + s.usage.cache_read_tokens + s.usage.cache_creation_tokens;
+        entry.0 += s.usage.input_tokens + s.usage.cache_read_tokens + s.usage.cache_creation_tokens;
         entry.1 += s.usage.output_tokens;
         entry.2 += s.estimated_cost_usd;
         entry.3 += 1;
         entry.4 += s.turn_count;
     }
     let mut projects: Vec<_> = project_map.into_iter().collect();
-    projects.sort_by(|a, b| b.1 .2.partial_cmp(&a.1 .2).unwrap());
+    projects.sort_by(|a, b| b.1.2.partial_cmp(&a.1.2).unwrap());
 
     // ── Chart data ───────────────────────────────────────────────
     let daily_labels: String = daily
@@ -154,8 +153,11 @@ pub fn run(
 
     // ── Session rows ─────────────────────────────────────────────
     let mut sorted_sessions = sessions.clone();
-    sorted_sessions
-        .sort_by(|a, b| b.estimated_cost_usd.partial_cmp(&a.estimated_cost_usd).unwrap());
+    sorted_sessions.sort_by(|a, b| {
+        b.estimated_cost_usd
+            .partial_cmp(&a.estimated_cost_usd)
+            .unwrap()
+    });
 
     let is_trivial = |s: &voyage_core::model::Session| -> bool {
         s.turn_count == 0 || (s.estimated_cost_usd < 0.005 && s.message_count <= 2)
@@ -175,9 +177,7 @@ pub fn run(
             voyage_core::model::Provider::OpenCode => {
                 r#"<span class="badge badge-opencode">OC</span>"#
             }
-            voyage_core::model::Provider::Codex => {
-                r#"<span class="badge badge-codex">CX</span>"#
-            }
+            voyage_core::model::Provider::Codex => r#"<span class="badge badge-codex">CX</span>"#,
         };
         let clean_summary = clean_session_summary(&s.summary);
         let summary_short = truncate_chars(&clean_summary, 72);
@@ -713,13 +713,11 @@ function toggleTrivial() {{
         heatmap_days = days,
     );
 
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join("voyage-report.html")
-        });
+    let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("voyage-report.html")
+    });
 
     std::fs::write(&output_path, &html)?;
     println!("Report generated: {}", output_path.display());
@@ -772,9 +770,11 @@ fn html_escape(s: &str) -> String {
 /// Clean noisy session summaries (e.g. system-prompt boilerplate).
 fn clean_session_summary(s: &str) -> String {
     let s = s.trim();
-    if s.starts_with("# AGENTS.md instructions") || s.starts_with("# agents.md instructions") {
-        "(auto-start)".to_string()
-    } else if s.starts_with("<INSTRUCTION>") || s.starts_with("<instruction>") {
+    if s.starts_with("# AGENTS.md instructions")
+        || s.starts_with("# agents.md instructions")
+        || s.starts_with("<INSTRUCTION>")
+        || s.starts_with("<instruction>")
+    {
         "(auto-start)".to_string()
     } else if s.is_empty() {
         "(no summary)".to_string()
@@ -849,9 +849,7 @@ fn short_model_name(s: &str) -> String {
     // Strip date suffix: "-20250929", "-20251001" etc.
     let base = if s.len() > 9 {
         let tail = &s[s.len() - 9..];
-        if tail.starts_with('-')
-            && tail[1..].chars().all(|c| c.is_ascii_digit())
-            && tail.len() == 9
+        if tail.starts_with('-') && tail[1..].chars().all(|c| c.is_ascii_digit()) && tail.len() == 9
         {
             &s[..s.len() - 9]
         } else {
@@ -879,4 +877,3 @@ fn short_model_name(s: &str) -> String {
     };
     re_version(base)
 }
-

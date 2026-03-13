@@ -96,7 +96,12 @@ impl GraphStore {
         )?;
 
         // Incremental migrations: add columns that may not exist yet
-        Self::try_add_column(&self.conn, "entity_mentions", "role", "TEXT DEFAULT 'unknown'");
+        Self::try_add_column(
+            &self.conn,
+            "entity_mentions",
+            "role",
+            "TEXT DEFAULT 'unknown'",
+        );
         Self::try_add_column(&self.conn, "entities", "pagerank", "REAL DEFAULT 0.0");
         Self::try_add_column(&self.conn, "entities", "community_id", "TEXT");
 
@@ -155,10 +160,7 @@ impl GraphStore {
              VALUES (?1, ?2, 1)
              ON CONFLICT(session_id, entity_id) DO UPDATE SET
                  mention_count = mention_count + 1",
-            params![
-                mention.session_id.to_string(),
-                entity.id.to_string(),
-            ],
+            params![mention.session_id.to_string(), entity.id.to_string(),],
         )?;
 
         Ok(())
@@ -216,7 +218,7 @@ impl GraphStore {
             "UPDATE entities SET session_count = (
                 SELECT COUNT(DISTINCT session_id) FROM session_entities
                 WHERE session_entities.entity_id = entities.id
-            )"
+            )",
         )?;
         Ok(())
     }
@@ -225,9 +227,9 @@ impl GraphStore {
 
     /// Get stats: count of entities by kind.
     pub fn entity_stats(&self) -> Result<Vec<(EntityKind, u32)>, GraphError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT kind, COUNT(*) FROM entities GROUP BY kind ORDER BY COUNT(*) DESC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, COUNT(*) FROM entities GROUP BY kind ORDER BY COUNT(*) DESC")?;
         let rows = stmt.query_map([], |row| {
             let kind_str: String = row.get(0)?;
             let count: u32 = row.get(1)?;
@@ -236,7 +238,7 @@ impl GraphStore {
         let mut stats = Vec::new();
         for row in rows {
             let (kind_str, count) = row?;
-            if let Some(kind) = EntityKind::from_str(&kind_str) {
+            if let Ok(kind) = kind_str.parse::<EntityKind>() {
                 stats.push((kind, count));
             }
         }
@@ -258,9 +260,8 @@ impl GraphStore {
                             COALESCE(pagerank, 0.0), community_id
                      FROM entities WHERE kind = ?1 ORDER BY pagerank DESC, mention_count DESC LIMIT ?2",
                 )?;
-                let rows = stmt.query_map(params![k.as_str(), limit as u32], |row| {
-                    Self::row_to_entity(row)
-                })?;
+                let rows =
+                    stmt.query_map(params![k.as_str(), limit as u32], Self::row_to_entity)?;
                 for row in rows {
                     entities.push(row?);
                 }
@@ -271,8 +272,7 @@ impl GraphStore {
                             COALESCE(pagerank, 0.0), community_id
                      FROM entities ORDER BY pagerank DESC, mention_count DESC LIMIT ?1",
                 )?;
-                let rows = stmt
-                    .query_map(params![limit as u32], |row| Self::row_to_entity(row))?;
+                let rows = stmt.query_map(params![limit as u32], Self::row_to_entity)?;
                 for row in rows {
                     entities.push(row?);
                 }
@@ -289,7 +289,7 @@ impl GraphStore {
             "SELECT id, kind, name, display_name, first_seen, last_seen, mention_count, session_count, pagerank, community_id
              FROM entities WHERE name = ?1",
         )?;
-        let mut rows = stmt.query_map(params![name], |row| Self::row_to_entity(row))?;
+        let mut rows = stmt.query_map(params![name], Self::row_to_entity)?;
         if let Some(row) = rows.next() {
             return Ok(Some(row?));
         }
@@ -338,11 +338,7 @@ impl GraphStore {
     }
 
     /// Get mentions of an entity with context.
-    pub fn get_mentions(
-        &self,
-        name: &str,
-        limit: usize,
-    ) -> Result<Vec<EntityMention>, GraphError> {
+    pub fn get_mentions(&self, name: &str, limit: usize) -> Result<Vec<EntityMention>, GraphError> {
         let mut stmt = self.conn.prepare(
             "SELECT em.entity_id, em.session_id, em.message_id, em.timestamp, em.context,
                     COALESCE(em.role, 'unknown')
@@ -375,7 +371,9 @@ impl GraphStore {
                     message_id: mid_str.and_then(|s| Uuid::parse_str(&s).ok()),
                     timestamp: ts.with_timezone(&Utc),
                     context,
-                    role: MentionRole::from_str(&role_str),
+                    role: role_str
+                        .parse::<MentionRole>()
+                        .unwrap_or(MentionRole::Unknown),
                 });
             }
         }
@@ -444,7 +442,9 @@ impl GraphStore {
                 edge_count += 1;
 
                 // Modifies: Write/Edit tool present → tool modifies files
-                if has_write && kind_a == "file" && kind_b == "tool"
+                if has_write
+                    && kind_a == "file"
+                    && kind_b == "tool"
                     && (id_b == "Write" || id_b == "Edit")
                 {
                     // We need to look up tool entity by name, not by id
@@ -467,17 +467,17 @@ impl GraphStore {
             let edit_tool_id = self.find_entity_id_by_name("Edit")?;
 
             for file_id in &files {
-                if let Some(ref wid) = write_tool_id {
-                    if tools.contains(wid.as_str()) {
-                        self.upsert_edge(wid, file_id, EdgeKind::Modifies, &now)?;
-                        edge_count += 1;
-                    }
+                if let Some(ref wid) = write_tool_id
+                    && tools.contains(wid.as_str())
+                {
+                    self.upsert_edge(wid, file_id, EdgeKind::Modifies, &now)?;
+                    edge_count += 1;
                 }
-                if let Some(ref eid) = edit_tool_id {
-                    if tools.contains(eid.as_str()) {
-                        self.upsert_edge(eid, file_id, EdgeKind::Modifies, &now)?;
-                        edge_count += 1;
-                    }
+                if let Some(ref eid) = edit_tool_id
+                    && tools.contains(eid.as_str())
+                {
+                    self.upsert_edge(eid, file_id, EdgeKind::Modifies, &now)?;
+                    edge_count += 1;
                 }
             }
         }
@@ -485,7 +485,11 @@ impl GraphStore {
         Ok(edge_count)
     }
 
-    fn session_has_tool_named(&self, session_id: &str, tool_name: &str) -> Result<bool, GraphError> {
+    fn session_has_tool_named(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+    ) -> Result<bool, GraphError> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM session_entities se
              JOIN entities e ON se.entity_id = e.id
@@ -497,9 +501,9 @@ impl GraphStore {
     }
 
     fn find_entity_id_by_name(&self, name: &str) -> Result<Option<String>, GraphError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM entities WHERE name = ?1 LIMIT 1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM entities WHERE name = ?1 LIMIT 1")?;
         let mut rows = stmt.query_map(params![name], |row| {
             let id: String = row.get(0)?;
             Ok(id)
@@ -539,9 +543,9 @@ impl GraphStore {
     pub fn rebuild_all_edges(&self) -> Result<u32, GraphError> {
         self.conn.execute("DELETE FROM edges", [])?;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT session_id FROM session_entities",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT session_id FROM session_entities")?;
         let session_ids: Vec<String> = stmt
             .query_map([], |row| {
                 let sid: String = row.get(0)?;
@@ -592,8 +596,8 @@ impl GraphStore {
         let mut result = Vec::new();
         for row in rows {
             let (nid, kind_str, weight) = row?;
-            if let (Some(kind), Some(neighbor)) =
-                (EdgeKind::from_str(&kind_str), self.get_entity_by_id(&nid)?)
+            if let (Ok(kind), Some(neighbor)) =
+                (kind_str.parse::<EdgeKind>(), self.get_entity_by_id(&nid)?)
             {
                 result.push((neighbor, kind, weight));
             }
@@ -682,10 +686,7 @@ impl GraphStore {
     }
 
     /// Get the timeline of an entity: mentions grouped by date.
-    pub fn entity_timeline(
-        &self,
-        name: &str,
-    ) -> Result<Vec<(String, u32)>, GraphError> {
+    pub fn entity_timeline(&self, name: &str) -> Result<Vec<(String, u32)>, GraphError> {
         let mut stmt = self.conn.prepare(
             "SELECT DATE(em.timestamp) as day, COUNT(*) as cnt
              FROM entity_mentions em
@@ -729,49 +730,39 @@ impl GraphStore {
 
     /// Get total entity count.
     pub fn entity_count(&self) -> Result<u32, GraphError> {
-        let count: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM entities",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: u32 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?;
         Ok(count)
     }
 
     /// Get total edge count.
     pub fn edge_count(&self) -> Result<u32, GraphError> {
-        let count: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM edges",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: u32 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))?;
         Ok(count)
     }
 
     /// Get total mention count.
     pub fn mention_count(&self) -> Result<u32, GraphError> {
-        let count: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM entity_mentions",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: u32 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM entity_mentions", [], |row| row.get(0))?;
         Ok(count)
     }
 
     /// Get extracted session count.
     pub fn extracted_session_count(&self) -> Result<u32, GraphError> {
-        let count: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM extraction_log",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: u32 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM extraction_log", [], |row| row.get(0))?;
         Ok(count)
     }
 
     /// Get all extracted session IDs (for the extract command).
     pub fn all_extracted_session_ids(&self) -> Result<HashSet<Uuid>, GraphError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT session_id FROM extraction_log",
-        )?;
+        let mut stmt = self.conn.prepare("SELECT session_id FROM extraction_log")?;
         let rows = stmt.query_map([], |row| {
             let sid: String = row.get(0)?;
             Ok(sid)
@@ -792,7 +783,7 @@ impl GraphStore {
              DELETE FROM session_entities;
              DELETE FROM edges;
              DELETE FROM entities;
-             DELETE FROM extraction_log;"
+             DELETE FROM extraction_log;",
         )?;
         Ok(())
     }
@@ -805,7 +796,7 @@ impl GraphStore {
                     COALESCE(pagerank, 0.0), community_id
              FROM entities WHERE id = ?1",
         )?;
-        let mut rows = stmt.query_map(params![id], |row| Self::row_to_entity(row))?;
+        let mut rows = stmt.query_map(params![id], Self::row_to_entity)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -825,7 +816,9 @@ impl GraphStore {
         let community_id: Option<String> = row.get::<_, Option<String>>(9).unwrap_or(None);
 
         let id = Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::nil());
-        let kind = EntityKind::from_str(&kind_str).unwrap_or(EntityKind::Concept);
+        let kind = kind_str
+            .parse::<EntityKind>()
+            .unwrap_or(EntityKind::Concept);
         let first_seen = DateTime::parse_from_rfc3339(&first_seen_str)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
@@ -861,9 +854,9 @@ impl GraphStore {
 
     /// Resolve an alias to a canonical entity ID, if one exists.
     pub fn resolve_alias(&self, alias_name: &str) -> Result<Option<String>, GraphError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT canonical_id FROM entity_aliases WHERE alias_name = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT canonical_id FROM entity_aliases WHERE alias_name = ?1")?;
         let mut rows = stmt.query_map(params![alias_name], |row| {
             let cid: String = row.get(0)?;
             Ok(cid)
@@ -879,10 +872,8 @@ impl GraphStore {
     /// Apply temporal decay to all edge weights.
     /// Each call multiplies all weights by the given factor (e.g. 0.95).
     pub fn apply_edge_decay(&self, factor: f64) -> Result<(), GraphError> {
-        self.conn.execute(
-            "UPDATE edges SET weight = weight * ?1",
-            params![factor],
-        )?;
+        self.conn
+            .execute("UPDATE edges SET weight = weight * ?1", params![factor])?;
         Ok(())
     }
 
@@ -920,9 +911,9 @@ impl GraphStore {
         let mut out_edges: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
         let mut out_weight: Vec<f64> = vec![0.0; n];
 
-        let mut edge_stmt = self.conn.prepare(
-            "SELECT source_id, target_id, weight FROM edges",
-        )?;
+        let mut edge_stmt = self
+            .conn
+            .prepare("SELECT source_id, target_id, weight FROM edges")?;
         let edges: Vec<(String, String, f64)> = edge_stmt
             .query_map([], |row| {
                 let s: String = row.get(0)?;
@@ -934,7 +925,9 @@ impl GraphStore {
             .collect();
 
         for (src, tgt, w) in &edges {
-            if let (Some(&si), Some(&ti)) = (id_to_idx.get(src.as_str()), id_to_idx.get(tgt.as_str())) {
+            if let (Some(&si), Some(&ti)) =
+                (id_to_idx.get(src.as_str()), id_to_idx.get(tgt.as_str()))
+            {
                 out_edges[si].push((ti, *w));
                 out_weight[si] += w;
                 // Treat as undirected for co-occurrence graph
@@ -950,8 +943,8 @@ impl GraphStore {
 
         for _ in 0..max_iter {
             let base = (1.0 - damping) / n as f64;
-            for i in 0..n {
-                new_pr[i] = base;
+            for val in new_pr.iter_mut() {
+                *val = base;
             }
 
             for i in 0..n {
@@ -962,14 +955,18 @@ impl GraphStore {
                 } else {
                     // Dangling node: distribute evenly
                     let share = damping * pr[i] / n as f64;
-                    for j in 0..n {
-                        new_pr[j] += share;
+                    for val in new_pr.iter_mut() {
+                        *val += share;
                     }
                 }
             }
 
             // Check convergence
-            let diff: f64 = pr.iter().zip(new_pr.iter()).map(|(a, b)| (a - b).abs()).sum();
+            let diff: f64 = pr
+                .iter()
+                .zip(new_pr.iter())
+                .map(|(a, b)| (a - b).abs())
+                .sum();
             std::mem::swap(&mut pr, &mut new_pr);
             if diff < epsilon {
                 break;
@@ -979,9 +976,7 @@ impl GraphStore {
         // Write back to DB
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut update = tx.prepare(
-                "UPDATE entities SET pagerank = ?1 WHERE id = ?2",
-            )?;
+            let mut update = tx.prepare("UPDATE entities SET pagerank = ?1 WHERE id = ?2")?;
             for (i, id) in entity_ids.iter().enumerate() {
                 update.execute(params![pr[i], id])?;
             }
@@ -1021,9 +1016,9 @@ impl GraphStore {
         // Build weighted adjacency list
         let mut neighbors: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
 
-        let mut edge_stmt = self.conn.prepare(
-            "SELECT source_id, target_id, weight FROM edges",
-        )?;
+        let mut edge_stmt = self
+            .conn
+            .prepare("SELECT source_id, target_id, weight FROM edges")?;
         let edges: Vec<(String, String, f64)> = edge_stmt
             .query_map([], |row| {
                 let s: String = row.get(0)?;
@@ -1035,7 +1030,9 @@ impl GraphStore {
             .collect();
 
         for (src, tgt, w) in &edges {
-            if let (Some(&si), Some(&ti)) = (id_to_idx.get(src.as_str()), id_to_idx.get(tgt.as_str())) {
+            if let (Some(&si), Some(&ti)) =
+                (id_to_idx.get(src.as_str()), id_to_idx.get(tgt.as_str()))
+            {
                 neighbors[si].push((ti, *w));
                 neighbors[ti].push((si, *w));
             }
@@ -1053,7 +1050,8 @@ impl GraphStore {
                 }
 
                 // Weighted vote: sum weights per neighbor label
-                let mut votes: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+                let mut votes: std::collections::HashMap<usize, f64> =
+                    std::collections::HashMap::new();
                 for &(j, w) in &neighbors[i] {
                     *votes.entry(labels[j]).or_insert(0.0) += w;
                 }
@@ -1079,9 +1077,7 @@ impl GraphStore {
         // Remap labels to community IDs (use the entity ID of the label's node)
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut update = tx.prepare(
-                "UPDATE entities SET community_id = ?1 WHERE id = ?2",
-            )?;
+            let mut update = tx.prepare("UPDATE entities SET community_id = ?1 WHERE id = ?2")?;
             for (i, id) in entity_ids.iter().enumerate() {
                 let community = &entity_ids[labels[i]];
                 update.execute(params![community, id])?;
@@ -1119,7 +1115,7 @@ impl GraphStore {
                  ORDER BY pagerank DESC, mention_count DESC",
             )?;
             let members: Vec<Entity> = member_stmt
-                .query_map(params![cid], |row| Self::row_to_entity(row))?
+                .query_map(params![cid], Self::row_to_entity)?
                 .filter_map(|r| r.ok())
                 .collect();
             if members.len() >= 2 {
@@ -1190,13 +1186,27 @@ mod tests {
         let file2 = make_entity(EntityKind::File, "src/b.rs");
         let tool = make_entity(EntityKind::Tool, "Read");
 
-        store.record_mention(&file1, &make_mention(&file1, sid)).unwrap();
-        store.record_mention(&file2, &make_mention(&file2, sid)).unwrap();
-        store.record_mention(&tool, &make_mention(&tool, sid)).unwrap();
+        store
+            .record_mention(&file1, &make_mention(&file1, sid))
+            .unwrap();
+        store
+            .record_mention(&file2, &make_mention(&file2, sid))
+            .unwrap();
+        store
+            .record_mention(&tool, &make_mention(&tool, sid))
+            .unwrap();
 
         let stats = store.entity_stats().unwrap();
-        let file_count = stats.iter().find(|(k, _)| *k == EntityKind::File).unwrap().1;
-        let tool_count = stats.iter().find(|(k, _)| *k == EntityKind::Tool).unwrap().1;
+        let file_count = stats
+            .iter()
+            .find(|(k, _)| *k == EntityKind::File)
+            .unwrap()
+            .1;
+        let tool_count = stats
+            .iter()
+            .find(|(k, _)| *k == EntityKind::Tool)
+            .unwrap()
+            .1;
         assert_eq!(file_count, 2);
         assert_eq!(tool_count, 1);
     }
@@ -1208,8 +1218,12 @@ mod tests {
         let sid2 = Uuid::new_v4();
 
         let entity = make_entity(EntityKind::File, "src/main.rs");
-        store.record_mention(&entity, &make_mention(&entity, sid1)).unwrap();
-        store.record_mention(&entity, &make_mention(&entity, sid2)).unwrap();
+        store
+            .record_mention(&entity, &make_mention(&entity, sid1))
+            .unwrap();
+        store
+            .record_mention(&entity, &make_mention(&entity, sid2))
+            .unwrap();
 
         let sessions = store.sessions_for_entity("src/main.rs").unwrap();
         assert_eq!(sessions.len(), 2);
@@ -1221,7 +1235,9 @@ mod tests {
         let sid = Uuid::new_v4();
 
         let entity = make_entity(EntityKind::File, "src/main.rs");
-        store.record_mention(&entity, &make_mention(&entity, sid)).unwrap();
+        store
+            .record_mention(&entity, &make_mention(&entity, sid))
+            .unwrap();
         store.mark_session_extracted(&sid, 1).unwrap();
 
         assert!(store.session_extracted(&sid).unwrap());
@@ -1240,8 +1256,12 @@ mod tests {
 
         let file = make_entity(EntityKind::File, "src/main.rs");
         let tool = make_entity(EntityKind::Tool, "Read");
-        store.record_mention(&file, &make_mention(&file, sid)).unwrap();
-        store.record_mention(&tool, &make_mention(&tool, sid)).unwrap();
+        store
+            .record_mention(&file, &make_mention(&file, sid))
+            .unwrap();
+        store
+            .record_mention(&tool, &make_mention(&tool, sid))
+            .unwrap();
 
         let files = store.list_entities(Some(EntityKind::File), 10).unwrap();
         assert_eq!(files.len(), 1);
@@ -1257,9 +1277,15 @@ mod tests {
         let file2 = make_entity(EntityKind::File, "src/b.rs");
         let tool = make_entity(EntityKind::Tool, "Read");
 
-        store.record_mention(&file1, &make_mention(&file1, sid)).unwrap();
-        store.record_mention(&file2, &make_mention(&file2, sid)).unwrap();
-        store.record_mention(&tool, &make_mention(&tool, sid)).unwrap();
+        store
+            .record_mention(&file1, &make_mention(&file1, sid))
+            .unwrap();
+        store
+            .record_mention(&file2, &make_mention(&file2, sid))
+            .unwrap();
+        store
+            .record_mention(&tool, &make_mention(&tool, sid))
+            .unwrap();
 
         let edges = store.build_edges_for_session(&sid).unwrap();
         assert!(edges > 0, "should build edges");
@@ -1276,7 +1302,9 @@ mod tests {
         let sid = Uuid::new_v4();
 
         let entity = make_entity(EntityKind::File, "src/main.rs");
-        store.record_mention(&entity, &make_mention(&entity, sid)).unwrap();
+        store
+            .record_mention(&entity, &make_mention(&entity, sid))
+            .unwrap();
 
         let timeline = store.entity_timeline("src/main.rs").unwrap();
         assert_eq!(timeline.len(), 1);
@@ -1289,7 +1317,9 @@ mod tests {
         let sid = Uuid::new_v4();
 
         let entity = make_entity(EntityKind::File, "src/main.rs");
-        store.record_mention(&entity, &make_mention(&entity, sid)).unwrap();
+        store
+            .record_mention(&entity, &make_mention(&entity, sid))
+            .unwrap();
         store.mark_session_extracted(&sid, 1).unwrap();
 
         store.clear_all().unwrap();
@@ -1321,10 +1351,14 @@ mod tests {
         let sid = Uuid::new_v4();
 
         let entity = make_entity(EntityKind::File, "src/main.rs");
-        store.record_mention(&entity, &make_mention(&entity, sid)).unwrap();
+        store
+            .record_mention(&entity, &make_mention(&entity, sid))
+            .unwrap();
 
         // Register alias
-        store.register_alias("main.rs", &entity.id.to_string()).unwrap();
+        store
+            .register_alias("main.rs", &entity.id.to_string())
+            .unwrap();
 
         // Resolve by alias
         let found = store.find_entity_by_name("main.rs").unwrap();
@@ -1339,8 +1373,12 @@ mod tests {
 
         let file1 = make_entity(EntityKind::File, "src/a.rs");
         let file2 = make_entity(EntityKind::File, "src/b.rs");
-        store.record_mention(&file1, &make_mention(&file1, sid)).unwrap();
-        store.record_mention(&file2, &make_mention(&file2, sid)).unwrap();
+        store
+            .record_mention(&file1, &make_mention(&file1, sid))
+            .unwrap();
+        store
+            .record_mention(&file2, &make_mention(&file2, sid))
+            .unwrap();
         store.build_edges_for_session(&sid).unwrap();
 
         let before = store.related_entities("src/a.rs", 10).unwrap();
@@ -1362,9 +1400,15 @@ mod tests {
         let file1 = make_entity(EntityKind::File, "src/a.rs");
         let file2 = make_entity(EntityKind::File, "src/b.rs");
         let file3 = make_entity(EntityKind::File, "src/c.rs");
-        store.record_mention(&file1, &make_mention(&file1, sid)).unwrap();
-        store.record_mention(&file2, &make_mention(&file2, sid)).unwrap();
-        store.record_mention(&file3, &make_mention(&file3, sid)).unwrap();
+        store
+            .record_mention(&file1, &make_mention(&file1, sid))
+            .unwrap();
+        store
+            .record_mention(&file2, &make_mention(&file2, sid))
+            .unwrap();
+        store
+            .record_mention(&file3, &make_mention(&file3, sid))
+            .unwrap();
         store.build_edges_for_session(&sid).unwrap();
 
         store.compute_pagerank().unwrap();
@@ -1384,8 +1428,12 @@ mod tests {
 
         let file1 = make_entity(EntityKind::File, "src/a.rs");
         let file2 = make_entity(EntityKind::File, "src/b.rs");
-        store.record_mention(&file1, &make_mention(&file1, sid)).unwrap();
-        store.record_mention(&file2, &make_mention(&file2, sid)).unwrap();
+        store
+            .record_mention(&file1, &make_mention(&file1, sid))
+            .unwrap();
+        store
+            .record_mention(&file2, &make_mention(&file2, sid))
+            .unwrap();
         store.build_edges_for_session(&sid).unwrap();
 
         store.compute_communities().unwrap();
@@ -1412,20 +1460,36 @@ mod tests {
         let file_c = make_entity(EntityKind::File, "src/c.rs");
 
         // Session 1: a + b + Read
-        store.record_mention(&file_a, &make_mention(&file_a, sid1)).unwrap();
-        store.record_mention(&file_b, &make_mention(&file_b, sid1)).unwrap();
-        store.record_mention(&tool, &make_mention(&tool, sid1)).unwrap();
+        store
+            .record_mention(&file_a, &make_mention(&file_a, sid1))
+            .unwrap();
+        store
+            .record_mention(&file_b, &make_mention(&file_b, sid1))
+            .unwrap();
+        store
+            .record_mention(&tool, &make_mention(&tool, sid1))
+            .unwrap();
         store.build_edges_for_session(&sid1).unwrap();
 
         // Session 2: a + b + Read
-        store.record_mention(&file_a, &make_mention(&file_a, sid2)).unwrap();
-        store.record_mention(&file_b, &make_mention(&file_b, sid2)).unwrap();
-        store.record_mention(&tool, &make_mention(&tool, sid2)).unwrap();
+        store
+            .record_mention(&file_a, &make_mention(&file_a, sid2))
+            .unwrap();
+        store
+            .record_mention(&file_b, &make_mention(&file_b, sid2))
+            .unwrap();
+        store
+            .record_mention(&tool, &make_mention(&tool, sid2))
+            .unwrap();
         store.build_edges_for_session(&sid2).unwrap();
 
         // Session 3: c + Read (without a or b → Read is ubiquitous noise)
-        store.record_mention(&file_c, &make_mention(&file_c, sid3)).unwrap();
-        store.record_mention(&tool, &make_mention(&tool, sid3)).unwrap();
+        store
+            .record_mention(&file_c, &make_mention(&file_c, sid3))
+            .unwrap();
+        store
+            .record_mention(&tool, &make_mention(&tool, sid3))
+            .unwrap();
         store.build_edges_for_session(&sid3).unwrap();
 
         let pmi_results = store.related_entities_pmi("src/a.rs", 10).unwrap();
@@ -1437,7 +1501,10 @@ mod tests {
             // If Read is present, file_b should rank higher (higher PMI)
             let b_idx = names.iter().position(|n| *n == "src/b.rs").unwrap();
             let read_idx = names.iter().position(|n| *n == "Read").unwrap();
-            assert!(b_idx < read_idx, "file_b should rank higher than Read via PMI");
+            assert!(
+                b_idx < read_idx,
+                "file_b should rank higher than Read via PMI"
+            );
         }
     }
 }

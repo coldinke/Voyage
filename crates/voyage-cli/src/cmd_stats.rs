@@ -4,16 +4,28 @@ use chrono::{DateTime, Utc};
 use voyage_core::model::cost_rates;
 use voyage_store::sqlite::SqliteStore;
 
-pub fn run(
-    db_path: &Path,
-    since: Option<DateTime<Utc>>,
-    days: u32,
-    project: Option<&str>,
-    by_model: bool,
-    daily: bool,
-    blocks: bool,
-    by_provider: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub struct StatsOptions<'a> {
+    pub db_path: &'a Path,
+    pub since: Option<DateTime<Utc>>,
+    pub days: u32,
+    pub project: Option<&'a str>,
+    pub by_model: bool,
+    pub daily: bool,
+    pub blocks: bool,
+    pub by_provider: bool,
+}
+
+pub fn run(opts: &StatsOptions<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    let StatsOptions {
+        db_path,
+        since,
+        days,
+        project,
+        by_model,
+        daily,
+        blocks,
+        by_provider,
+    } = opts;
     if !db_path.exists() {
         println!("No data yet. Run `voyage ingest` first.");
         return Ok(());
@@ -21,14 +33,14 @@ pub fn run(
 
     let store = SqliteStore::open(db_path)?;
 
-    if daily {
-        return run_daily(&store, since, days);
+    if *daily {
+        return run_daily(&store, *since, *days);
     }
-    if blocks {
+    if *blocks {
         return run_blocks(&store);
     }
-    if by_provider {
-        return run_by_provider(&store, since, days);
+    if *by_provider {
+        return run_by_provider(&store, *since, *days);
     }
 
     let period_label = if since.is_none() {
@@ -37,8 +49,8 @@ pub fn run(
         format!("last {days} day(s)")
     };
 
-    if by_model {
-        let stats = store.get_stats_by_model(since)?;
+    if *by_model {
+        let stats = store.get_stats_by_model(*since)?;
         if stats.is_empty() {
             println!("No usage data for {period_label}.");
             return Ok(());
@@ -60,7 +72,7 @@ pub fn run(
             );
         }
     } else {
-        let stats = store.get_stats(since, project)?;
+        let stats = store.get_stats(*since, *project)?;
         if stats.session_count == 0 {
             println!("No usage data for {period_label}.");
             return Ok(());
@@ -92,12 +104,11 @@ pub fn run(
         let cache_denominator =
             stats.input_tokens + stats.cache_read_tokens + stats.cache_creation_tokens;
         if cache_denominator > 0 {
-            let cache_hit_rate =
-                stats.cache_read_tokens as f64 / cache_denominator as f64 * 100.0;
+            let cache_hit_rate = stats.cache_read_tokens as f64 / cache_denominator as f64 * 100.0;
             println!("  Cache hit rate:   {cache_hit_rate:.1}%");
 
             // Compute cache savings: sum of (cache_read * (input_rate - cache_read_rate)) per model
-            let cache_by_model = store.get_cache_read_by_model(since)?;
+            let cache_by_model = store.get_cache_read_by_model(*since)?;
             let savings: f64 = cache_by_model
                 .iter()
                 .map(|(model, cache_read)| {
@@ -133,8 +144,8 @@ fn run_daily(
 
     println!("Daily usage ({period_label}):\n");
     println!(
-        "{:<12} {:>8} {:>6} {:>10} {:>10} {:>10}  {}",
-        "DATE", "SESSIONS", "TURNS", "INPUT", "OUTPUT", "COST", ""
+        "{:<12} {:>8} {:>6} {:>10} {:>10} {:>10}",
+        "DATE", "SESSIONS", "TURNS", "INPUT", "OUTPUT", "COST"
     );
     println!("{}", "-".repeat(78));
 
