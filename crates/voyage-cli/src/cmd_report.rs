@@ -305,290 +305,306 @@ pub fn run(
 
     let html = format!(
         r##"<!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Voyage — Token Analytics</title>
+<title>Voyage — Analytics</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
 <style>
-/* ── Semantic tokens: dark theme (default) ─────────────────── */
-:root, [data-theme="dark"] {{
-  --bg:          oklch(12% 0.01 250);
-  --surface-1:   oklch(16% 0.01 250);
-  --surface-2:   oklch(21% 0.01 250);
-  --border:      oklch(30% 0.01 250);
-  --border-sub:  oklch(22% 0.01 250);
-
-  --text-1:      oklch(93% 0.01 250);
-  --text-2:      oklch(65% 0.02 250);
-  --text-3:      oklch(50% 0.02 250);
-
-  --accent:      oklch(65% 0.14 220);
-  --accent-dim:  oklch(65% 0.14 220 / 0.12);
-  --success:     oklch(68% 0.16 155);
-  --success-dim: oklch(68% 0.16 155 / 0.12);
-  --warn:        oklch(75% 0.15 75);
-  --warn-dim:    oklch(75% 0.15 75 / 0.12);
-  --error:       oklch(65% 0.2 25);
-  --muted:       oklch(60% 0.1 280);
-  --muted-dim:   oklch(60% 0.1 280 / 0.12);
-
-  --chart-grid:  oklch(22% 0.01 250);
-  --chart-text:  oklch(50% 0.02 250);
-
-  --body-weight: 400;
-  --code-bg:     oklch(18% 0.01 250);
-  --hover-bg:    oklch(20% 0.02 220 / 0.4);
-  --toggle-bg:   oklch(22% 0.01 250);
+:root, [data-theme="light"] {{
+  --bg:         oklch(97% 0.005 75);
+  --surface:    oklch(100% 0.002 75);
+  --border:     oklch(87% 0.012 75);
+  --border-sub: oklch(91% 0.008 75);
+  --text-1:     oklch(18% 0.01 50);
+  --text-2:     oklch(42% 0.015 50);
+  --text-3:     oklch(58% 0.015 50);
+  --accent:     oklch(55% 0.14 40);
+  --accent-s:   oklch(55% 0.14 40 / 0.08);
+  --success:    oklch(48% 0.12 155);
+  --success-s:  oklch(48% 0.12 155 / 0.08);
+  --warn:       oklch(56% 0.13 80);
+  --warn-s:     oklch(56% 0.13 80 / 0.08);
+  --error:      oklch(52% 0.16 25);
+  --muted:      oklch(55% 0.06 260);
+  --code-bg:    oklch(94% 0.006 75);
+  --hover:      oklch(55% 0.14 40 / 0.04);
+  color-scheme: light;
+}}
+[data-theme="dark"] {{
+  --bg:         oklch(14% 0.007 50);
+  --surface:    oklch(18% 0.007 50);
+  --border:     oklch(26% 0.01 50);
+  --border-sub: oklch(22% 0.008 50);
+  --text-1:     oklch(90% 0.008 50);
+  --text-2:     oklch(62% 0.015 50);
+  --text-3:     oklch(48% 0.015 50);
+  --accent:     oklch(70% 0.13 40);
+  --accent-s:   oklch(70% 0.13 40 / 0.10);
+  --success:    oklch(65% 0.12 155);
+  --success-s:  oklch(65% 0.12 155 / 0.10);
+  --warn:       oklch(72% 0.12 80);
+  --warn-s:     oklch(72% 0.12 80 / 0.10);
+  --error:      oklch(65% 0.15 25);
+  --muted:      oklch(62% 0.06 260);
+  --code-bg:    oklch(19% 0.007 50);
+  --hover:      oklch(70% 0.13 40 / 0.06);
   color-scheme: dark;
 }}
 
-/* ── Semantic tokens: light theme ──────────────────────────── */
-[data-theme="light"] {{
-  --bg:          oklch(97% 0.008 60);
-  --surface-1:   oklch(100% 0.003 60);
-  --surface-2:   oklch(95% 0.008 60);
-  --border:      oklch(85% 0.01 60);
-  --border-sub:  oklch(90% 0.008 60);
-
-  --text-1:      oklch(18% 0.01 60);
-  --text-2:      oklch(40% 0.02 60);
-  --text-3:      oklch(55% 0.02 60);
-
-  --accent:      oklch(50% 0.16 220);
-  --accent-dim:  oklch(50% 0.16 220 / 0.08);
-  --success:     oklch(48% 0.14 155);
-  --success-dim: oklch(48% 0.14 155 / 0.08);
-  --warn:        oklch(55% 0.14 75);
-  --warn-dim:    oklch(55% 0.14 75 / 0.08);
-  --error:       oklch(52% 0.18 25);
-  --muted:       oklch(48% 0.08 280);
-  --muted-dim:   oklch(48% 0.08 280 / 0.08);
-
-  --chart-grid:  oklch(90% 0.008 60);
-  --chart-text:  oklch(50% 0.02 60);
-
-  --body-weight: 420;
-  --code-bg:     oklch(94% 0.008 60);
-  --hover-bg:    oklch(50% 0.16 220 / 0.04);
-  --toggle-bg:   oklch(92% 0.008 60);
-  color-scheme: light;
-}}
-
-/* ── Reset & base ──────────────────────────────────────────── */
 *, *::before, *::after {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{
-  background: var(--bg);
-  color: var(--text-1);
-  font-family: 'Instrument Sans', system-ui, sans-serif;
-  font-weight: var(--body-weight);
-  line-height: 1.5;
+  background: var(--bg); color: var(--text-1);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 14px; line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }}
 
-/* ── Layout ────────────────────────────────────────────────── */
-.dash {{ max-width: 1400px; margin: 0 auto; padding: 32px 28px; }}
+.page {{ max-width: 1320px; margin: 0 auto; padding: 48px 36px 32px; }}
 
-/* ── Header ────────────────────────────────────────────────── */
-.hdr {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }}
-.hdr-left {{ display:flex; align-items:baseline; gap:14px; }}
-.hdr h1 {{ font-size:1.4rem; font-weight:700; letter-spacing:-0.03em; }}
-.hdr .tag {{
-  font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:500;
-  color:var(--text-3); background:var(--surface-1); padding:3px 10px; border-radius:5px;
+/* Header */
+.header {{ display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:44px; }}
+.header h1 {{ font-family:'Outfit',system-ui; font-size:1.8rem; font-weight:800; letter-spacing:-0.04em; line-height:1; }}
+.subtitle {{ font-size:0.78rem; color:var(--text-3); margin-top:6px; }}
+.theme-btn {{
+  appearance:none; border:1px solid var(--border-sub); background:transparent;
+  border-radius:20px; width:34px; height:34px; cursor:pointer; font-size:0.9rem;
+  color:var(--text-3); display:grid; place-items:center;
+  transition: border-color 0.2s ease-out;
+}}
+.theme-btn:hover {{ border-color:var(--text-2); }}
+
+/* Metrics */
+.metrics {{
+  display:flex; align-items:flex-start; gap:0;
+  padding-bottom:36px; border-bottom:1px solid var(--border);
+  margin-bottom:48px; flex-wrap:wrap;
+}}
+.metric {{ flex:1; min-width:120px; padding:0 22px; }}
+.metric:first-child {{ padding-left:0; }}
+.metric-sep {{ width:1px; align-self:stretch; background:var(--border); flex-shrink:0; }}
+.metric-val {{
+  font-family:'Outfit',system-ui; font-size:1.65rem; font-weight:700;
+  letter-spacing:-0.03em; line-height:1.1;
+}}
+.metric-lbl {{
+  font-size:0.65rem; font-weight:600; color:var(--text-3);
+  text-transform:uppercase; letter-spacing:0.06em; margin-top:5px;
+}}
+.metric-sub {{ font-size:0.72rem; color:var(--text-2); margin-top:2px; }}
+
+/* Sections */
+.section {{ margin-bottom:48px; }}
+.section > h2 {{
+  font-family:'Outfit',system-ui; font-size:1.05rem; font-weight:700;
+  letter-spacing:-0.02em; margin-bottom:20px; padding-bottom:8px;
+  border-bottom:2px solid var(--accent); display:inline-block;
+}}
+.section > h2 .ct {{ font-weight:400; color:var(--text-3); }}
+
+/* Chart containers */
+.g21 {{ display:grid; grid-template-columns:2fr 1fr; gap:24px; }}
+.g3  {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:24px; }}
+.g12 {{ display:grid; grid-template-columns:1fr 2fr; gap:24px; }}
+.cb {{
+  background:var(--surface); border-radius:10px; padding:20px;
   border:1px solid var(--border-sub);
 }}
-.meta {{ font-size:0.75rem; color:var(--text-3); margin-bottom:32px; }}
-
-/* ── Theme toggle ──────────────────────────────────────────── */
-.theme-toggle {{
-  appearance:none; border:none; cursor:pointer;
-  background:var(--toggle-bg); border-radius:6px; padding:6px 10px;
-  font-family:'Instrument Sans',system-ui; font-size:0.75rem; font-weight:500;
-  color:var(--text-2); border:1px solid var(--border-sub);
-  transition: background 0.2s, color 0.2s;
+.cb h3 {{
+  font-family:'Outfit',system-ui; font-size:0.7rem; font-weight:600;
+  color:var(--text-3); text-transform:uppercase; letter-spacing:0.05em;
+  margin-bottom:14px;
 }}
-.theme-toggle:hover {{ color:var(--text-1); }}
 
-/* ── KPI row ───────────────────────────────────────────────── */
-.kpis {{ display:grid; grid-template-columns:repeat(7,1fr); gap:10px; margin-bottom:28px; }}
-.kpi {{
-  background:var(--surface-1); border:1px solid var(--border-sub); border-radius:8px;
-  padding:14px 16px; border-left:3px solid transparent;
-}}
-.kpi.k-cost   {{ border-left-color:var(--success); }}
-.kpi.k-tok    {{ border-left-color:var(--accent); }}
-.kpi.k-sess   {{ border-left-color:var(--warn); }}
-.kpi.k-avg    {{ border-left-color:var(--success); }}
-.kpi.k-cache  {{ border-left-color:var(--muted); }}
-.kpi.k-model  {{ border-left-color:var(--accent); }}
-.kpi .lbl {{ font-size:0.65rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px; }}
-.kpi .val {{ font-family:'JetBrains Mono',monospace; font-size:1.25rem; font-weight:600; }}
-.kpi .sub {{ font-family:'JetBrains Mono',monospace; font-size:0.65rem; color:var(--text-3); margin-top:3px; }}
-
-/* ── Chart panels ──────────────────────────────────────────── */
-.grid {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:14px; }}
-.panel {{
-  background:var(--surface-1); border:1px solid var(--border-sub);
-  border-radius:8px; padding:16px;
-}}
-.panel h3 {{ font-size:0.7rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }}
-.c2 {{ grid-column:span 2; }}
-.c3 {{ grid-column:span 3; }}
-
-/* ── Tables ────────────────────────────────────────────────── */
-.tbl-wrap {{ background:var(--surface-1); border:1px solid var(--border-sub); border-radius:8px; padding:16px; margin-bottom:14px; }}
-.tbl-wrap h3 {{ font-size:0.7rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }}
-.scroll {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; font-size:0.75rem; white-space:nowrap; table-layout:fixed; }}
+/* Tables */
+.tw {{ overflow-x:auto; margin-top:16px; }}
+table {{ width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap; table-layout:fixed; }}
 th {{
-  text-align:left; padding:7px 10px; border-bottom:1px solid var(--border);
-  font-size:0.62rem; font-weight:600; color:var(--text-3);
-  text-transform:uppercase; letter-spacing:0.04em;
-  overflow:hidden; text-overflow:ellipsis;
+  text-align:left; padding:8px 12px;
+  font-family:'Outfit',system-ui; font-size:0.63rem; font-weight:600;
+  color:var(--text-3); text-transform:uppercase; letter-spacing:0.05em;
+  border-bottom:2px solid var(--border); overflow:hidden; text-overflow:ellipsis;
 }}
-td {{ padding:6px 10px; border-bottom:1px solid var(--border-sub); overflow:hidden; text-overflow:ellipsis; }}
-tr:hover td {{ background:var(--hover-bg); }}
-.num {{ text-align:right; font-variant-numeric:tabular-nums; font-family:'JetBrains Mono',monospace; }}
-.cost-val {{ color:var(--success); font-weight:500; font-family:'JetBrains Mono',monospace; }}
+td {{ padding:7px 12px; border-bottom:1px solid var(--border-sub); overflow:hidden; text-overflow:ellipsis; }}
+tr:hover td {{ background:var(--hover); }}
+.num {{ text-align:right; font-variant-numeric:tabular-nums; }}
+.cost-val {{ color:var(--success); font-weight:600; }}
 code {{
-  background:var(--code-bg); padding:2px 6px; border-radius:3px;
-  font-size:0.68rem; font-family:'JetBrains Mono',monospace;
+  background:var(--code-bg); padding:2px 6px; border-radius:4px;
+  font-size:0.72rem; font-family:'Menlo','Consolas',monospace;
 }}
 
-/* ── Badges ────────────────────────────────────────────────── */
+/* Badges */
 .badge {{
-  display:inline-block; padding:1px 7px; border-radius:3px;
-  font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.03em;
+  display:inline-block; padding:2px 8px; border-radius:4px;
+  font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
 }}
-.badge-claude  {{ background:var(--accent-dim); color:var(--accent); }}
-.badge-opencode {{ background:var(--success-dim); color:var(--success); }}
-.badge-codex   {{ background:var(--warn-dim); color:var(--warn); }}
+.badge-claude  {{ background:var(--accent-s); color:var(--accent); }}
+.badge-opencode {{ background:var(--success-s); color:var(--success); }}
+.badge-codex   {{ background:var(--warn-s); color:var(--warn); }}
 
-/* ── Summary cell ─────────────────────────────────────────── */
-.summary-cell {{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:0.7rem; color:var(--text-2); }}
+.summary-cell {{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-2); }}
+.cat-row td {{ background:var(--surface); }}
 
-/* ── Token composition bar ─────────────────────────────────── */
-/* ── Category row (tool table) ─────────────────────────────── */
-.cat-row td {{ background:var(--surface-2); }}
-
-/* ── Token composition bar ─────────────────────────────────── */
-.comp-bar {{ display:flex; height:6px; border-radius:3px; overflow:hidden; min-width:56px; background:var(--surface-2); }}
+.comp-bar {{ display:flex; height:7px; border-radius:4px; overflow:hidden; min-width:56px; background:var(--border-sub); }}
 .seg-in    {{ background:var(--accent); }}
 .seg-out   {{ background:var(--warn); }}
-.seg-cache {{ background:var(--muted); opacity:0.65; }}
+.seg-cache {{ background:var(--muted); opacity:0.6; }}
 
-/* ── Footer ────────────────────────────────────────────────── */
-.foot {{ text-align:center; color:var(--text-3); font-size:0.68rem; padding:20px 0 6px; }}
-.foot a {{ color:var(--accent); text-decoration:none; }}
-
-/* ── Responsive ────────────────────────────────────────────── */
-@media (max-width:1100px) {{
-  .kpis {{ grid-template-columns:repeat(4,1fr); }}
-  .grid {{ grid-template-columns:1fr; }}
-  .c2,.c3 {{ grid-column:span 1; }}
+footer {{
+  color:var(--text-3); font-size:0.72rem; padding:24px 0 8px;
+  border-top:1px solid var(--border-sub);
 }}
-@media (max-width:640px) {{
-  .kpis {{ grid-template-columns:repeat(2,1fr); }}
-  .dash {{ padding:16px 12px; }}
+footer a {{ color:var(--accent); text-decoration:none; }}
+footer a:hover {{ text-decoration:underline; }}
+
+/* Animations */
+@keyframes rise {{
+  from {{ opacity:0; transform:translateY(10px); }}
+  to {{ opacity:1; transform:translateY(0); }}
+}}
+.metric {{ animation: rise 0.45s cubic-bezier(0.16,1,0.3,1) both; }}
+.metric:nth-child(1)  {{ animation-delay:0s; }}
+.metric:nth-child(3)  {{ animation-delay:0.04s; }}
+.metric:nth-child(5)  {{ animation-delay:0.08s; }}
+.metric:nth-child(7)  {{ animation-delay:0.12s; }}
+.metric:nth-child(9)  {{ animation-delay:0.16s; }}
+.metric:nth-child(11) {{ animation-delay:0.2s; }}
+.section {{ animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) both; animation-delay:0.15s; }}
+
+@media (prefers-reduced-motion:reduce) {{
+  *, *::before, *::after {{ animation-duration:0.01ms !important; transition-duration:0.01ms !important; }}
+}}
+@media (max-width:1100px) {{
+  .g21,.g12 {{ grid-template-columns:1fr; }}
+  .g3 {{ grid-template-columns:1fr 1fr; }}
+}}
+@media (max-width:768px) {{
+  .page {{ padding:24px 16px; }}
+  .header {{ flex-direction:column; gap:12px; }}
+  .metrics {{ flex-direction:column; gap:20px; padding-bottom:24px; margin-bottom:32px; }}
+  .metric {{ padding:0; }}
+  .metric-sep {{ width:100%; height:1px; }}
+  .g3 {{ grid-template-columns:1fr; }}
+  .section {{ margin-bottom:32px; }}
 }}
 </style>
 </head>
 <body>
-<div class="dash">
+<div class="page">
 
-  <div class="hdr">
-    <div class="hdr-left">
+  <header class="header">
+    <div>
       <h1>Voyage</h1>
-      <span class="tag">{period_tag}</span>
+      <p class="subtitle">{period_tag} &middot; {now} &middot; {provider_count} provider(s) &middot; {project_count} project(s)</p>
     </div>
-    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">Light</button>
-  </div>
-  <div class="meta">{now} &middot; {provider_count} provider(s) &middot; {project_count} project(s)</div>
+    <button class="theme-btn" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">&#9790;</button>
+  </header>
 
-  <div class="kpis">
-    <div class="kpi k-cost"><div class="lbl">Total Cost</div><div class="val">${cost:.2}</div><div class="sub">{cost_per_day}/day</div></div>
-    <div class="kpi k-tok"><div class="lbl">Total Tokens</div><div class="val">{total_tokens_fmt}</div><div class="sub">{input_fmt} in / {output_fmt} out</div></div>
-    <div class="kpi k-sess"><div class="lbl">Sessions</div><div class="val">{session_count}</div><div class="sub">{total_turns} turns</div></div>
-    <div class="kpi k-avg"><div class="lbl">Avg / Session</div><div class="val">${avg_cost:.4}</div><div class="sub">{avg_tokens} tokens</div></div>
-    <div class="kpi k-cache"><div class="lbl">Cache Read</div><div class="val">{cache_read_fmt}</div><div class="sub">{cache_hit_rate:.1}% hit rate</div></div>
-    <div class="kpi k-cache"><div class="lbl">Cache Write</div><div class="val">{cache_write_fmt}</div></div>
-    <div class="kpi k-model"><div class="lbl">Models</div><div class="val">{model_count}</div><div class="sub">{top_model}</div></div>
-  </div>
-
-  <div class="grid">
-    <div class="panel c2"><h3>Daily Cost &amp; Sessions</h3><canvas id="cDaily" height="100"></canvas></div>
-    <div class="panel"><h3>Token Composition</h3><canvas id="cTokens"></canvas></div>
-  </div>
-  <div class="grid">
-    <div class="panel"><h3>Cost by Model</h3><canvas id="cModel"></canvas></div>
-    <div class="panel"><h3>Cost by Provider</h3><canvas id="cProvider"></canvas></div>
-    <div class="panel"><h3>Cost by Project</h3><canvas id="cProject"></canvas></div>
-  </div>
-  <div class="grid">
-    <div class="panel c3"><h3>Daily Token Volume (K)</h3><canvas id="cVolume" height="70"></canvas></div>
-  </div>
-  <div class="grid">
-    <div class="panel"><h3>Tool Calls by Category</h3><canvas id="cToolCat"></canvas></div>
-    <div class="panel c2"><h3>Top Tools ({total_tool_calls} total calls)</h3><canvas id="cTopTools" height="90"></canvas></div>
+  <div class="metrics">
+    <div class="metric"><div class="metric-val">${cost:.2}</div><div class="metric-lbl">Total Cost</div><div class="metric-sub">{cost_per_day}/day</div></div>
+    <div class="metric-sep"></div>
+    <div class="metric"><div class="metric-val">{total_tokens_fmt}</div><div class="metric-lbl">Tokens</div><div class="metric-sub">{input_fmt} in &middot; {output_fmt} out</div></div>
+    <div class="metric-sep"></div>
+    <div class="metric"><div class="metric-val">{session_count}</div><div class="metric-lbl">Sessions</div><div class="metric-sub">{total_turns} turns</div></div>
+    <div class="metric-sep"></div>
+    <div class="metric"><div class="metric-val">${avg_cost:.4}</div><div class="metric-lbl">Avg / Session</div><div class="metric-sub">{avg_tokens} tokens</div></div>
+    <div class="metric-sep"></div>
+    <div class="metric"><div class="metric-val">{cache_hit_rate:.1}%</div><div class="metric-lbl">Cache Hit Rate</div><div class="metric-sub">{cache_read_fmt} read &middot; {cache_write_fmt} write</div></div>
+    <div class="metric-sep"></div>
+    <div class="metric"><div class="metric-val">{model_count}</div><div class="metric-lbl">Models</div><div class="metric-sub">{top_model}</div></div>
   </div>
 
-  <div class="tbl-wrap"><h3>Tool Usage</h3><div class="scroll">
-    <table><colgroup><col style="width:10%"><col style="width:50%"><col style="width:20%"><col style="width:20%"></colgroup><thead><tr><th></th><th>Tool</th><th class="num">Calls</th><th class="num">Share</th></tr></thead>
-    <tbody>{tool_table_rows}</tbody></table>
-  </div></div>
+  <section class="section">
+    <h2>Daily Overview</h2>
+    <div class="g21">
+      <div class="cb"><canvas id="cDaily" height="110"></canvas></div>
+      <div class="cb"><h3>Token Composition</h3><canvas id="cTokens"></canvas></div>
+    </div>
+  </section>
 
-  <div class="tbl-wrap"><h3>Projects</h3><div class="scroll">
-    <table><colgroup><col style="width:40%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup><thead><tr><th>Project</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Avg/Sess</th></tr></thead>
-    <tbody>{project_detail_rows}</tbody></table>
-  </div></div>
+  <section class="section">
+    <h2>Cost Breakdown</h2>
+    <div class="g3">
+      <div class="cb"><h3>By Model</h3><canvas id="cModel"></canvas></div>
+      <div class="cb"><h3>By Provider</h3><canvas id="cProvider"></canvas></div>
+      <div class="cb"><h3>By Project</h3><canvas id="cProject"></canvas></div>
+    </div>
+  </section>
 
-  <div class="tbl-wrap"><h3>Sessions ({session_count})</h3><div class="scroll">
-    <table><colgroup><col style="width:6%"><col style="width:7%"><col style="width:16%"><col style="width:22%"><col style="width:11%"><col style="width:8%"><col style="width:5%"><col style="width:5%"><col style="width:7%"><col style="width:5%"><col style="width:8%"></colgroup><thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th class="num">Msgs</th><th class="num">Turns</th><th class="num">Tokens</th><th>Mix</th><th class="num">Cost</th></tr></thead>
-    <tbody>{session_table}</tbody></table>
-  </div></div>
+  <section class="section">
+    <h2>Token Volume</h2>
+    <div class="cb"><canvas id="cVolume" height="80"></canvas></div>
+  </section>
 
-  <div class="foot">Generated by <a href="https://github.com/coldinke/Voyage">Voyage</a> v0.1.0</div>
+  <section class="section">
+    <h2>Tool Usage</h2>
+    <div class="g12" style="margin-bottom:20px">
+      <div class="cb"><h3>By Category</h3><canvas id="cToolCat"></canvas></div>
+      <div class="cb"><h3>Top Tools ({total_tool_calls} calls)</h3><canvas id="cTopTools" height="100"></canvas></div>
+    </div>
+    <div class="tw">
+      <table><colgroup><col style="width:10%"><col style="width:50%"><col style="width:20%"><col style="width:20%"></colgroup>
+      <thead><tr><th></th><th>Tool</th><th class="num">Calls</th><th class="num">Share</th></tr></thead>
+      <tbody>{tool_table_rows}</tbody></table>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Projects</h2>
+    <div class="tw">
+      <table><colgroup><col style="width:40%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>
+      <thead><tr><th>Project</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Avg/Sess</th></tr></thead>
+      <tbody>{project_detail_rows}</tbody></table>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Sessions <span class="ct">({session_count})</span></h2>
+    <div class="tw">
+      <table><colgroup><col style="width:6%"><col style="width:7%"><col style="width:16%"><col style="width:22%"><col style="width:11%"><col style="width:8%"><col style="width:5%"><col style="width:5%"><col style="width:7%"><col style="width:5%"><col style="width:8%"></colgroup>
+      <thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th class="num">Msgs</th><th class="num">Turns</th><th class="num">Tokens</th><th>Mix</th><th class="num">Cost</th></tr></thead>
+      <tbody>{session_table}</tbody></table>
+    </div>
+  </section>
+
+  <footer>Generated by <a href="https://github.com/coldinke/Voyage">Voyage</a></footer>
 </div>
 
 <script>
-// ── Theme management ─────────────────────────────────────────
-function getTheme() {{ return document.documentElement.getAttribute('data-theme') || 'dark'; }}
+function getTheme() {{ return document.documentElement.getAttribute('data-theme') || 'light'; }}
 function setTheme(t) {{
   document.documentElement.setAttribute('data-theme', t);
-  document.getElementById('themeBtn').textContent = t === 'dark' ? 'Light' : 'Dark';
+  document.getElementById('themeBtn').innerHTML = t === 'dark' ? '&#9788;' : '&#9790;';
   try {{ localStorage.setItem('voyage-theme', t); }} catch(e) {{}}
   refreshCharts();
 }}
 function toggleTheme() {{ setTheme(getTheme() === 'dark' ? 'light' : 'dark'); }}
-// Restore saved preference
 try {{
   const saved = localStorage.getItem('voyage-theme');
   if (saved) setTheme(saved);
-  else if (window.matchMedia('(prefers-color-scheme: light)').matches) setTheme('light');
+  else if (window.matchMedia('(prefers-color-scheme: dark)').matches) setTheme('dark');
 }} catch(e) {{}}
 
-// ── Palette (theme-aware) ────────────────────────────────────
 function P() {{
-  const dark = getTheme() === 'dark';
+  const dk = getTheme() === 'dark';
   return {{
-    accent:   dark ? '#5ba3d9' : '#2e7ab8',
-    success:  dark ? '#4cb87a' : '#2d8a56',
-    warn:     dark ? '#c9a84c' : '#9a7c2e',
-    error:    dark ? '#c85a5a' : '#a33a3a',
-    muted:    dark ? '#8a7cc8' : '#6a5caa',
-    teal:     dark ? '#49b8a8' : '#2d8a7a',
-    grid:     dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-    text:     dark ? '#7a8599' : '#6b7280',
-    border:   dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
+    accent:  dk ? '#c97a55' : '#a35a38',
+    success: dk ? '#5aaa74' : '#358a5a',
+    warn:    dk ? '#c5a44a' : '#9a7c28',
+    error:   dk ? '#c06858' : '#a04040',
+    muted:   dk ? '#7a88aa' : '#646c8a',
+    teal:    dk ? '#55a89a' : '#2a8a7a',
+    grid:    dk ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
+    text:    dk ? '#8a7a70' : '#7a6a60',
+    border:  dk ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
   }};
 }}
 
-// ── Chart instances (for re-creation on theme switch) ────────
 let charts = [];
 function destroyCharts() {{ charts.forEach(c => c.destroy()); charts = []; }}
 
@@ -597,20 +613,18 @@ function refreshCharts() {{
   const p = P();
   Chart.defaults.color = p.text;
   Chart.defaults.borderColor = p.border;
-  Chart.defaults.font.family = "'JetBrains Mono','Instrument Sans',system-ui";
+  Chart.defaults.font.family = "'DM Sans','Outfit',system-ui";
   Chart.defaults.font.size = 11;
+  const donut = {{ cutout:'65%', plugins:{{ legend:{{ position:'bottom', labels:{{ padding:12, usePointStyle:true, pointStyle:'circle', font:{{ size:11 }} }} }} }} }};
 
-  const donut = {{ cutout:'62%', plugins:{{ legend:{{ position:'bottom', labels:{{ padding:10, usePointStyle:true, pointStyle:'circle' }} }} }} }};
-
-  // Daily Cost + Sessions
   charts.push(new Chart(document.getElementById('cDaily'), {{
     type:'bar',
     data:{{
       labels:[{daily_labels}],
       datasets:[
-        {{ label:'Cost ($)', data:[{daily_costs}], backgroundColor:p.success+'aa', borderRadius:3, yAxisID:'y', order:2 }},
-        {{ label:'Sessions', data:[{daily_sessions}], type:'line', borderColor:p.warn, backgroundColor:p.warn+'22', pointRadius:2.5, pointBackgroundColor:p.warn, tension:0.35, yAxisID:'y1', order:1, fill:true }},
-        {{ label:'Turns', data:[{daily_turns}], type:'line', borderColor:p.teal, borderDash:[3,3], pointRadius:0, tension:0.35, yAxisID:'y1', order:0 }}
+        {{ label:'Cost ($)', data:[{daily_costs}], backgroundColor:p.success+'aa', borderRadius:4, yAxisID:'y', order:2 }},
+        {{ label:'Sessions', data:[{daily_sessions}], type:'line', borderColor:p.accent, backgroundColor:p.accent+'18', pointRadius:2.5, pointBackgroundColor:p.accent, tension:0.4, yAxisID:'y1', order:1, fill:true }},
+        {{ label:'Turns', data:[{daily_turns}], type:'line', borderColor:p.muted, borderDash:[4,4], pointRadius:0, tension:0.4, yAxisID:'y1', order:0 }}
       ]
     }},
     options:{{
@@ -620,107 +634,70 @@ function refreshCharts() {{
         y1:{{ position:'right', grid:{{ display:false }}, ticks:{{ stepSize:1 }} }},
         x:{{ grid:{{ display:false }} }}
       }},
-      plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:10 }} }} }}
+      plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:12 }} }} }}
     }}
   }}));
 
-  // Token breakdown
   charts.push(new Chart(document.getElementById('cTokens'), {{
     type:'doughnut',
-    data:{{
-      labels:[{token_breakdown_labels}],
-      datasets:[{{ data:[{token_breakdown_data}], backgroundColor:[p.accent,p.warn,p.muted,p.teal], borderWidth:0 }}]
-    }},
+    data:{{ labels:[{token_breakdown_labels}], datasets:[{{ data:[{token_breakdown_data}], backgroundColor:[p.accent,p.warn,p.muted,p.teal], borderWidth:0 }}] }},
     options:donut
   }}));
 
-  // Model
   charts.push(new Chart(document.getElementById('cModel'), {{
     type:'doughnut',
-    data:{{
-      labels:[{model_labels}],
-      datasets:[{{ data:[{model_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}]
-    }},
+    data:{{ labels:[{model_labels}], datasets:[{{ data:[{model_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}] }},
     options:donut
   }}));
 
-  // Provider
   charts.push(new Chart(document.getElementById('cProvider'), {{
     type:'doughnut',
-    data:{{
-      labels:[{provider_labels}],
-      datasets:[{{ data:[{provider_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted], borderWidth:0 }}]
-    }},
+    data:{{ labels:[{provider_labels}], datasets:[{{ data:[{provider_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted], borderWidth:0 }}] }},
     options:donut
   }}));
 
-  // Project bar
   charts.push(new Chart(document.getElementById('cProject'), {{
     type:'bar',
-    data:{{
-      labels:[{proj_labels}],
-      datasets:[{{ label:'Cost ($)', data:[{proj_costs}], backgroundColor:p.accent+'bb', borderRadius:3 }}]
-    }},
-    options:{{
-      indexAxis:'y',
-      plugins:{{ legend:{{ display:false }} }},
-      scales:{{ x:{{ grid:{{ color:p.grid }}, ticks:{{ callback:v=>'$'+v }} }}, y:{{ grid:{{ display:false }} }} }}
-    }}
+    data:{{ labels:[{proj_labels}], datasets:[{{ label:'Cost ($)', data:[{proj_costs}], backgroundColor:p.accent+'bb', borderRadius:4 }}] }},
+    options:{{ indexAxis:'y', plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ grid:{{ color:p.grid }}, ticks:{{ callback:v=>'$'+v }} }}, y:{{ grid:{{ display:false }} }} }} }}
   }}));
 
-  // Daily token volume
   charts.push(new Chart(document.getElementById('cVolume'), {{
     type:'bar',
     data:{{
       labels:[{daily_labels}],
       datasets:[
-        {{ label:'Input (K)', data:[{daily_input}], backgroundColor:p.accent+'99', borderRadius:2 }},
-        {{ label:'Output (K)', data:[{daily_output}], backgroundColor:p.warn+'99', borderRadius:2 }}
+        {{ label:'Input (K)', data:[{daily_input}], backgroundColor:p.accent+'88', borderRadius:3 }},
+        {{ label:'Output (K)', data:[{daily_output}], backgroundColor:p.warn+'88', borderRadius:3 }}
       ]
     }},
     options:{{
-      scales:{{
-        x:{{ stacked:true, grid:{{ display:false }} }},
-        y:{{ stacked:true, grid:{{ color:p.grid }}, ticks:{{ callback:v=>v+'K' }} }}
-      }},
-      plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:10 }} }} }}
+      scales:{{ x:{{ stacked:true, grid:{{ display:false }} }}, y:{{ stacked:true, grid:{{ color:p.grid }}, ticks:{{ callback:v=>v+'K' }} }} }},
+      plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:12 }} }} }}
     }}
   }}));
 
-  // Tool calls by category (doughnut)
   charts.push(new Chart(document.getElementById('cToolCat'), {{
     type:'doughnut',
-    data:{{
-      labels:[{cat_labels}],
-      datasets:[{{ data:[{cat_data}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}]
-    }},
+    data:{{ labels:[{cat_labels}], datasets:[{{ data:[{cat_data}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}] }},
     options:donut
   }}));
 
-  // Top tools (horizontal bar)
   charts.push(new Chart(document.getElementById('cTopTools'), {{
     type:'bar',
-    data:{{
-      labels:[{top_tool_labels}],
-      datasets:[{{ label:'Calls', data:[{top_tool_data}], backgroundColor:p.accent+'bb', borderRadius:3 }}]
-    }},
-    options:{{
-      indexAxis:'y',
-      plugins:{{ legend:{{ display:false }} }},
-      scales:{{ x:{{ grid:{{ color:p.grid }} }}, y:{{ grid:{{ display:false }} }} }}
-    }}
+    data:{{ labels:[{top_tool_labels}], datasets:[{{ label:'Calls', data:[{top_tool_data}], backgroundColor:p.accent+'bb', borderRadius:4 }}] }},
+    options:{{ indexAxis:'y', plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ grid:{{ color:p.grid }} }}, y:{{ grid:{{ display:false }} }} }} }}
   }}));
 }}
 
-// Initial render
 refreshCharts();
 </script>
 </body>
 </html>"##,
         period_tag = if since.is_none() {
-            "all".to_string()
+            "All time".to_string()
         } else {
-            format!("{days}d")
+            format!("Last {days} day(s)")
         },
         now = Utc::now().format("%Y-%m-%d %H:%M UTC"),
         provider_count = by_provider.len(),
