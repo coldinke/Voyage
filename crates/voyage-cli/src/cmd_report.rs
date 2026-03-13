@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use voyage_core::model::cost_rates;
 use voyage_store::sqlite::SqliteStore;
 
 pub fn run(
@@ -19,9 +20,8 @@ pub fn run(
 
     let overall = store.get_stats(since, None)?;
     let by_model = store.get_stats_by_model(since)?;
-    let by_provider = store.get_stats_by_provider(since)?;
     let daily = store.get_daily_stats(since)?;
-    let sessions = store.list_sessions(since, None, 100)?;
+    let sessions = store.list_sessions(since, None, 200)?;
     let tool_stats = store.get_tool_stats(since)?;
 
     let period_label = if since.is_none() {
@@ -35,25 +35,23 @@ pub fn run(
         return Ok(());
     }
 
-    // Per-project aggregation
-    let mut project_map: std::collections::HashMap<String, (u64, u64, f64, u64, u32)> =
-        std::collections::HashMap::new();
-    for s in &sessions {
-        let entry = project_map.entry(s.project.clone()).or_default();
-        entry.0 += s.usage.input_tokens + s.usage.cache_read_tokens + s.usage.cache_creation_tokens;
-        entry.1 += s.usage.output_tokens;
-        entry.2 += s.estimated_cost_usd;
-        entry.3 += 1;
-        entry.4 += s.turn_count;
-    }
-    let mut projects: Vec<_> = project_map.into_iter().collect();
-    projects.sort_by(|a, b| b.1.2.partial_cmp(&a.1.2).unwrap());
-
+    // ── Computed insights ────────────────────────────────────────
     let total_tokens = overall.input_tokens
         + overall.output_tokens
         + overall.cache_read_tokens
         + overall.cache_creation_tokens;
 
+    let total_turns: u64 = sessions.iter().map(|s| s.turn_count as u64).sum();
+
+    let cost_per_turn = if total_turns > 0 {
+        overall.total_cost_usd / total_turns as f64
+    } else {
+        0.0
+    };
+
+    let active_days = daily.len() as u32;
+
+    // Cache metrics
     let cache_tokens = overall.cache_read_tokens + overall.cache_creation_tokens;
     let cache_hit_rate = if overall.input_tokens + cache_tokens > 0 {
         overall.cache_read_tokens as f64 / (overall.input_tokens + cache_tokens) as f64 * 100.0
@@ -61,13 +59,31 @@ pub fn run(
         0.0
     };
 
-    let avg_cost = if overall.session_count > 0 {
-        overall.total_cost_usd / overall.session_count as f64
-    } else {
-        0.0
-    };
+    let cache_by_model = store.get_cache_read_by_model(since)?;
+    let cache_savings: f64 = cache_by_model
+        .iter()
+        .map(|(model, cache_read)| {
+            let (input_rate, _, cache_read_rate, _) = cost_rates(model);
+            *cache_read as f64 * (input_rate - cache_read_rate) / 1_000_000.0
+        })
+        .sum();
 
-    // Chart data serialization
+    // Per-project aggregation
+    let mut project_map: std::collections::HashMap<String, (u64, u64, f64, u64, u32)> =
+        std::collections::HashMap::new();
+    for s in &sessions {
+        let entry = project_map.entry(s.project.clone()).or_default();
+        entry.0 +=
+            s.usage.input_tokens + s.usage.cache_read_tokens + s.usage.cache_creation_tokens;
+        entry.1 += s.usage.output_tokens;
+        entry.2 += s.estimated_cost_usd;
+        entry.3 += 1;
+        entry.4 += s.turn_count;
+    }
+    let mut projects: Vec<_> = project_map.into_iter().collect();
+    projects.sort_by(|a, b| b.1 .2.partial_cmp(&a.1 .2).unwrap());
+
+    // ── Chart data ───────────────────────────────────────────────
     let daily_labels: String = daily
         .iter()
         .map(|d| format!("\"{}\"", &d.date[5..]))
@@ -83,49 +99,29 @@ pub fn run(
         .map(|d| d.session_count.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let daily_input: String = daily
-        .iter()
-        .map(|d| (d.input_tokens / 1000).to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let daily_output: String = daily
-        .iter()
-        .map(|d| (d.output_tokens / 1000).to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let daily_turns: String = daily
-        .iter()
-        .map(|d| d.turn_count.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
 
-    let model_labels: String = by_model
+    // Filter model chart data: exclude empty/synthetic models
+    let chart_models: Vec<_> = by_model
         .iter()
-        .map(|m| format!("\"{}\"", m.model))
+        .filter(|m| !m.model.is_empty() && m.model != "<synthetic>" && m.total_cost_usd > 0.005)
+        .collect();
+    let model_labels: String = chart_models
+        .iter()
+        .map(|m| format!("\"{}\"", short_model_name(&m.model)))
         .collect::<Vec<_>>()
         .join(",");
-    let model_costs: String = by_model
+    let model_costs: String = chart_models
         .iter()
         .map(|m| format!("{:.4}", m.total_cost_usd))
         .collect::<Vec<_>>()
         .join(",");
 
-    let provider_labels: String = by_provider
-        .iter()
-        .map(|p| format!("\"{}\"", p.provider))
-        .collect::<Vec<_>>()
-        .join(",");
-    let provider_costs: String = by_provider
-        .iter()
-        .map(|p| format!("{:.4}", p.total_cost_usd))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let top_projects = &projects[..projects.len().min(10)];
+    let top_projects = &projects[..projects.len().min(5)];
     let proj_labels: String = top_projects
         .iter()
         .map(|(name, _)| {
-            let short = shorten_path(name, 35);
+            let short = project_display_name(name);
+            let short = truncate_chars(&short, 16);
             format!("\"{short}\"")
         })
         .collect::<Vec<_>>()
@@ -136,114 +132,7 @@ pub fn run(
         .collect::<Vec<_>>()
         .join(",");
 
-    let token_breakdown_labels = r#""Input","Output","Cache Read","Cache Write""#;
-    let token_breakdown_data = format!(
-        "{},{},{},{}",
-        overall.input_tokens,
-        overall.output_tokens,
-        overall.cache_read_tokens,
-        overall.cache_creation_tokens
-    );
-
-    // Session table rows
-    let session_rows: String = sessions.iter().map(|s| {
-        let total = s.usage.total();
-        let tokens_str = format_tokens(total);
-        let project_short = shorten_path(&s.project, 40);
-        let provider_badge = match s.provider {
-            voyage_core::model::Provider::ClaudeCode => r#"<span class="badge badge-claude">Claude</span>"#,
-            voyage_core::model::Provider::OpenCode => r#"<span class="badge badge-opencode">OpenCode</span>"#,
-            voyage_core::model::Provider::Codex => r#"<span class="badge badge-codex">Codex</span>"#,
-        };
-        let summary_short = truncate_chars(&s.summary, 60);
-        let summary_escaped = html_escape(&s.summary);
-        let summary_short_escaped = html_escape(&summary_short);
-        let model_short = truncate_chars(&s.model, 20);
-        let input_pct = if total > 0 { (s.usage.input_tokens as f64 / total as f64 * 100.0) as u32 } else { 0 };
-        let output_pct = if total > 0 { (s.usage.output_tokens as f64 / total as f64 * 100.0) as u32 } else { 0 };
-        let cache_pct = 100u32.saturating_sub(input_pct).saturating_sub(output_pct);
-
-        format!(
-            r#"<tr>
-              <td><code>{id}</code></td>
-              <td>{provider}</td>
-              <td title="{project_full}">{project}</td>
-              <td class="summary-cell" title="{summary_full}">{summary}</td>
-              <td><code>{model}</code></td>
-              <td>{date}</td>
-              <td>{msgs}</td>
-              <td>{turns}</td>
-              <td class="num">{tokens}</td>
-              <td><div class="comp-bar"><span class="seg-in" style="width:{input_pct}%"></span><span class="seg-out" style="width:{output_pct}%"></span><span class="seg-cache" style="width:{cache_pct}%"></span></div></td>
-              <td class="num cost-val">${cost:.4}</td>
-            </tr>"#,
-            id = &s.id.to_string()[..8],
-            provider = provider_badge,
-            project_full = html_escape(&s.project),
-            project = project_short,
-            summary_full = summary_escaped,
-            summary = summary_short_escaped,
-            model = model_short,
-            date = s.started_at.format("%m-%d %H:%M"),
-            msgs = s.message_count,
-            turns = s.turn_count,
-            tokens = tokens_str,
-            input_pct = input_pct,
-            output_pct = output_pct,
-            cache_pct = cache_pct,
-            cost = s.estimated_cost_usd,
-        )
-    }).collect::<Vec<_>>().join("\n");
-
-    let project_detail_rows: String = projects.iter().map(|(name, stats)| {
-        let total = stats.0 + stats.1;
-        format!(
-            r#"<tr><td title="{name}">{short}</td><td class="num">{sessions}</td><td class="num">{turns}</td><td class="num">{tokens}</td><td class="num cost-val">${cost:.4}</td><td class="num">${avg:.4}</td></tr>"#,
-            name = html_escape(name),
-            short = shorten_path(name, 50),
-            sessions = stats.3,
-            turns = stats.4,
-            tokens = format_tokens(total),
-            cost = stats.2,
-            avg = if stats.3 > 0 { stats.2 / stats.3 as f64 } else { 0.0 },
-        )
-    }).collect::<Vec<_>>().join("\n");
-
-    // ── Tool usage aggregation ──────────────────────────────────
-    let total_tool_calls: u64 = tool_stats.iter().map(|t| t.count).sum();
-
-    fn tool_category(name: &str) -> &'static str {
-        match name {
-            "Read" | "Write" | "Edit" | "Glob" | "Grep" | "NotebookEdit" => "File Operations",
-            "Bash" | "Task" | "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" | "TaskStop"
-            | "TaskOutput" => "Execution & Tasks",
-            "Agent" | "Skill" | "ToolSearch" => "AI & Agents",
-            "WebFetch" | "WebSearch" => "Web",
-            _ => "Other",
-        }
-    }
-
-    // Category aggregation
-    let mut category_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
-    for t in &tool_stats {
-        *category_map.entry(tool_category(&t.tool)).or_default() += t.count;
-    }
-    let mut categories: Vec<_> = category_map.into_iter().collect();
-    categories.sort_by(|a, b| b.1.cmp(&a.1));
-
-    let cat_labels: String = categories
-        .iter()
-        .map(|(name, _)| format!("\"{name}\""))
-        .collect::<Vec<_>>()
-        .join(",");
-    let cat_data: String = categories
-        .iter()
-        .map(|(_, count)| count.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-
-    // Top tools chart (max 12)
-    let top_tools = &tool_stats[..tool_stats.len().min(12)];
+    let top_tools = &tool_stats[..tool_stats.len().min(6)];
     let top_tool_labels: String = top_tools
         .iter()
         .map(|t| format!("\"{}\"", t.tool))
@@ -254,323 +143,412 @@ pub fn run(
         .map(|t| t.count.to_string())
         .collect::<Vec<_>>()
         .join(",");
+    let total_tool_calls: u64 = tool_stats.iter().map(|t| t.count).sum();
 
-    // Tool table rows (grouped by category)
-    let mut tools_by_cat: std::collections::HashMap<&str, Vec<(&str, u64)>> =
-        std::collections::HashMap::new();
-    for t in &tool_stats {
-        tools_by_cat
-            .entry(tool_category(&t.tool))
-            .or_default()
-            .push((&t.tool, t.count));
-    }
-    let tool_table_rows: String = {
-        let mut rows = Vec::new();
-        let mut sorted_cats: Vec<_> = tools_by_cat.into_iter().collect();
-        sorted_cats.sort_by(|a, b| {
-            let sum_a: u64 = a.1.iter().map(|x| x.1).sum();
-            let sum_b: u64 = b.1.iter().map(|x| x.1).sum();
-            sum_b.cmp(&sum_a)
-        });
-        for (cat, mut tools) in sorted_cats {
-            tools.sort_by(|a, b| b.1.cmp(&a.1));
-            let cat_total: u64 = tools.iter().map(|x| x.1).sum();
-            let pct = if total_tool_calls > 0 {
-                cat_total as f64 / total_tool_calls as f64 * 100.0
+    // Heatmap data
+    let heatmap_data: String = daily
+        .iter()
+        .map(|d| format!("[\"{}\",{}]", d.date, d.session_count))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // ── Session rows ─────────────────────────────────────────────
+    let mut sorted_sessions = sessions.clone();
+    sorted_sessions
+        .sort_by(|a, b| b.estimated_cost_usd.partial_cmp(&a.estimated_cost_usd).unwrap());
+
+    let is_trivial = |s: &voyage_core::model::Session| -> bool {
+        s.turn_count == 0 || (s.estimated_cost_usd < 0.005 && s.message_count <= 2)
+    };
+
+    let meaningful_count = sorted_sessions.iter().filter(|s| !is_trivial(s)).count();
+    let trivial_count = sorted_sessions.iter().filter(|s| is_trivial(s)).count();
+
+    let render_session_row = |s: &voyage_core::model::Session| -> String {
+        let total = s.usage.total();
+        let tokens_str = format_tokens(total);
+        let proj_name = project_display_name(&s.project);
+        let provider_badge = match s.provider {
+            voyage_core::model::Provider::ClaudeCode => {
+                r#"<span class="badge badge-claude">CC</span>"#
+            }
+            voyage_core::model::Provider::OpenCode => {
+                r#"<span class="badge badge-opencode">OC</span>"#
+            }
+            voyage_core::model::Provider::Codex => {
+                r#"<span class="badge badge-codex">CX</span>"#
+            }
+        };
+        let clean_summary = clean_session_summary(&s.summary);
+        let summary_short = truncate_chars(&clean_summary, 72);
+        let summary_escaped = html_escape(&clean_summary);
+        let summary_short_escaped = html_escape(&summary_short);
+        let model_short = truncate_chars(&s.model, 22);
+        let token_detail = format!(
+            "In: {} / Out: {} / Cache: {}",
+            format_tokens(s.usage.input_tokens),
+            format_tokens(s.usage.output_tokens),
+            format_tokens(s.usage.cache_read_tokens + s.usage.cache_creation_tokens),
+        );
+
+        format!(
+            r#"<tr>
+              <td>{provider} {project}</td>
+              <td class="summary-cell" title="{summary_full}">{summary}</td>
+              <td><code>{model}</code></td>
+              <td>{date}</td>
+              <td class="num" title="{token_detail}">{tokens} <span class="sub">/ {turns}t</span></td>
+              <td class="num cost-val">{cost}</td>
+            </tr>"#,
+            provider = provider_badge,
+            project = html_escape(&proj_name),
+            summary_full = summary_escaped,
+            summary = summary_short_escaped,
+            model = model_short,
+            date = s.started_at.format("%m-%d %H:%M"),
+            tokens = tokens_str,
+            token_detail = token_detail,
+            turns = s.turn_count,
+            cost = format_cost(s.estimated_cost_usd),
+        )
+    };
+
+    let session_rows: String = sorted_sessions
+        .iter()
+        .filter(|s| !is_trivial(s))
+        .map(render_session_row)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let trivial_rows: String = sorted_sessions
+        .iter()
+        .filter(|s| is_trivial(s))
+        .map(render_session_row)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // ── Project table rows ───────────────────────────────────────
+    let project_detail_rows: String = projects
+        .iter()
+        .filter(|(_, stats)| stats.2 > 0.005 || stats.4 > 0) // filter noise
+        .map(|(name, stats)| {
+            let total = stats.0 + stats.1;
+            let cost_per_t = if stats.4 > 0 {
+                stats.2 / stats.4 as f64
             } else {
                 0.0
             };
-            rows.push(format!(
-                r#"<tr class="cat-row"><td colspan="2"><strong>{cat}</strong></td><td class="num"><strong>{total}</strong></td><td class="num"><strong>{pct:.1}%</strong></td></tr>"#,
-                cat = cat,
-                total = format_tokens(cat_total),
-                pct = pct,
-            ));
-            for (tool, count) in &tools {
-                let tool_pct = if total_tool_calls > 0 {
-                    *count as f64 / total_tool_calls as f64 * 100.0
-                } else {
-                    0.0
-                };
-                rows.push(format!(
-                    r#"<tr><td></td><td><code>{tool}</code></td><td class="num">{count}</td><td class="num">{pct:.1}%</td></tr>"#,
-                    tool = tool,
-                    count = format_tokens(*count),
-                    pct = tool_pct,
-                ));
-            }
-        }
-        rows.join("\n")
-    };
+            format!(
+                r#"<tr><td title="{name}">{short}</td><td class="num">{sessions}</td><td class="num">{turns}</td><td class="num">{tokens}</td><td class="num cost-val">{cost}</td><td class="num">{cpt}</td></tr>"#,
+                name = html_escape(name),
+                short = project_display_name(name),
+                sessions = stats.3,
+                turns = stats.4,
+                tokens = format_tokens(total),
+                cost = format_cost(stats.2),
+                cpt = format_cost(cost_per_t),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
+    // ── HTML ─────────────────────────────────────────────────────
     let html = format!(
         r##"<!DOCTYPE html>
 <html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Voyage — Analytics</title>
+<title>Voyage — Usage Report</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,700;9..144,900&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root, [data-theme="light"] {{
-  --bg:         oklch(97% 0.005 75);
-  --surface:    oklch(100% 0.002 75);
-  --border:     oklch(87% 0.012 75);
-  --border-sub: oklch(91% 0.008 75);
-  --text-1:     oklch(18% 0.01 50);
-  --text-2:     oklch(42% 0.015 50);
-  --text-3:     oklch(58% 0.015 50);
-  --accent:     oklch(55% 0.14 40);
-  --accent-s:   oklch(55% 0.14 40 / 0.08);
-  --success:    oklch(48% 0.12 155);
-  --success-s:  oklch(48% 0.12 155 / 0.08);
-  --warn:       oklch(56% 0.13 80);
-  --warn-s:     oklch(56% 0.13 80 / 0.08);
-  --error:      oklch(52% 0.16 25);
-  --muted:      oklch(55% 0.06 260);
-  --code-bg:    oklch(94% 0.006 75);
-  --hover:      oklch(55% 0.14 40 / 0.04);
+  --bg: oklch(97% 0.004 80);
+  --surface: oklch(99.5% 0.002 80);
+  --rule: oklch(86% 0.008 80);
+  --rule-light: oklch(92% 0.004 80);
+  --ink: oklch(18% 0.008 50);
+  --ink-2: oklch(38% 0.012 50);
+  --ink-3: oklch(55% 0.008 50);
+  --accent: oklch(46% 0.14 155);
+  --accent-dim: oklch(46% 0.14 155 / 0.08);
+  --red: oklch(52% 0.14 25);
+  --amber: oklch(58% 0.12 75);
+  --teal: oklch(46% 0.09 195);
+  --blue: oklch(48% 0.09 260);
+  --slate: oklch(52% 0.025 265);
+  --code-bg: oklch(94% 0.003 80);
+  --hover: oklch(95% 0.006 80);
   color-scheme: light;
 }}
 [data-theme="dark"] {{
-  --bg:         oklch(14% 0.007 50);
-  --surface:    oklch(18% 0.007 50);
-  --border:     oklch(26% 0.01 50);
-  --border-sub: oklch(22% 0.008 50);
-  --text-1:     oklch(90% 0.008 50);
-  --text-2:     oklch(62% 0.015 50);
-  --text-3:     oklch(48% 0.015 50);
-  --accent:     oklch(70% 0.13 40);
-  --accent-s:   oklch(70% 0.13 40 / 0.10);
-  --success:    oklch(65% 0.12 155);
-  --success-s:  oklch(65% 0.12 155 / 0.10);
-  --warn:       oklch(72% 0.12 80);
-  --warn-s:     oklch(72% 0.12 80 / 0.10);
-  --error:      oklch(65% 0.15 25);
-  --muted:      oklch(62% 0.06 260);
-  --code-bg:    oklch(19% 0.007 50);
-  --hover:      oklch(70% 0.13 40 / 0.06);
+  --bg: oklch(14% 0.005 60);
+  --surface: oklch(18% 0.005 60);
+  --rule: oklch(26% 0.008 60);
+  --rule-light: oklch(21% 0.005 60);
+  --ink: oklch(91% 0.004 60);
+  --ink-2: oklch(70% 0.008 60);
+  --ink-3: oklch(50% 0.006 60);
+  --accent: oklch(62% 0.12 155);
+  --accent-dim: oklch(62% 0.12 155 / 0.08);
+  --red: oklch(68% 0.12 25);
+  --amber: oklch(74% 0.12 75);
+  --teal: oklch(64% 0.09 195);
+  --blue: oklch(68% 0.09 260);
+  --slate: oklch(60% 0.025 265);
+  --code-bg: oklch(19% 0.005 60);
+  --hover: oklch(20% 0.008 60);
   color-scheme: dark;
 }}
 
 *, *::before, *::after {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{
-  background: var(--bg); color: var(--text-1);
-  font-family: 'DM Sans', system-ui, sans-serif;
+  background: var(--bg); color: var(--ink);
+  font-family: 'Figtree', system-ui, sans-serif;
   font-size: 14px; line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }}
 
-.page {{ max-width: 1320px; margin: 0 auto; padding: 48px 36px 32px; }}
+.page {{ max-width: 1200px; margin: 0 auto; padding: 48px 40px 32px; }}
 
-/* Header */
-.header {{ display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:44px; }}
-.header h1 {{ font-family:'Outfit',system-ui; font-size:1.8rem; font-weight:800; letter-spacing:-0.04em; line-height:1; }}
-.subtitle {{ font-size:0.78rem; color:var(--text-3); margin-top:6px; }}
-.theme-btn {{
-  appearance:none; border:1px solid var(--border-sub); background:transparent;
-  border-radius:20px; width:34px; height:34px; cursor:pointer; font-size:0.9rem;
-  color:var(--text-3); display:grid; place-items:center;
-  transition: border-color 0.2s ease-out;
+/* ── Header ── */
+.masthead {{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom: 32px; }}
+.logo {{
+  font-family: 'Fraunces', Georgia, serif; font-size: 1.1rem; font-weight: 700;
+  letter-spacing: -0.02em; color: var(--ink);
 }}
-.theme-btn:hover {{ border-color:var(--text-2); }}
+.logo-sub {{ font-family: 'Figtree', system-ui; font-size: 0.72rem; font-weight: 400; color: var(--ink-3); margin-left: 10px; }}
+.theme-toggle {{
+  appearance: none; background: none; border: 1px solid var(--rule);
+  width: 28px; height: 28px; border-radius: 50%; cursor: pointer;
+  color: var(--ink-3); font-size: 0.8rem; display: grid; place-items: center;
+  transition: border-color 0.15s;
+}}
+.theme-toggle:hover {{ border-color: var(--ink-2); }}
 
-/* Metrics */
-.metrics {{
-  display:flex; align-items:flex-start; gap:0;
-  padding-bottom:36px; border-bottom:1px solid var(--border);
-  margin-bottom:48px; flex-wrap:wrap;
+/* ── Summary block ── */
+.summary {{ margin-bottom: 40px; display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: end; }}
+.cost-big {{
+  font-family: 'Fraunces', Georgia, serif; font-optical-sizing: auto;
+  font-size: clamp(2.8rem, 5vw, 4rem); font-weight: 900;
+  letter-spacing: -0.04em; line-height: 1; color: var(--ink);
 }}
-.metric {{ flex:1; min-width:120px; padding:0 22px; }}
-.metric:first-child {{ padding-left:0; }}
-.metric-sep {{ width:1px; align-self:stretch; background:var(--border); flex-shrink:0; }}
-.metric-val {{
-  font-family:'Outfit',system-ui; font-size:1.65rem; font-weight:700;
-  letter-spacing:-0.03em; line-height:1.1;
+.cost-big .sub-period {{
+  font-family: 'Figtree', system-ui; font-size: 0.82rem; font-weight: 500;
+  color: var(--ink-3); letter-spacing: 0; vertical-align: baseline; margin-left: 12px;
 }}
-.metric-lbl {{
-  font-size:0.65rem; font-weight:600; color:var(--text-3);
-  text-transform:uppercase; letter-spacing:0.06em; margin-top:5px;
+.summary-line {{
+  display: flex; flex-wrap: wrap; gap: 6px 20px;
+  font-size: 0.82rem; color: var(--ink-2); margin-top: 8px; line-height: 1.6;
 }}
-.metric-sub {{ font-size:0.72rem; color:var(--text-2); margin-top:2px; }}
+.summary-line strong {{ color: var(--ink); font-weight: 600; }}
+.summary-line .accent {{ color: var(--accent); font-weight: 600; }}
 
-/* Sections */
-.section {{ margin-bottom:48px; }}
-.section > h2 {{
-  font-family:'Outfit',system-ui; font-size:1.05rem; font-weight:700;
-  letter-spacing:-0.02em; margin-bottom:20px; padding-bottom:8px;
-  border-bottom:2px solid var(--accent); display:inline-block;
+/* ── Section ── */
+section {{ margin-bottom: 48px; }}
+.sec-head {{
+  font-family: 'Figtree', system-ui; font-size: 0.88rem; font-weight: 600;
+  color: var(--ink); margin-bottom: 14px; letter-spacing: -0.01em;
 }}
-.section > h2 .ct {{ font-weight:400; color:var(--text-3); }}
+.sec-head .count {{ font-weight: 400; color: var(--ink-3); }}
 
-/* Chart containers */
-.g21 {{ display:grid; grid-template-columns:2fr 1fr; gap:24px; }}
-.g3  {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:24px; }}
-.g12 {{ display:grid; grid-template-columns:1fr 2fr; gap:24px; }}
-.cb {{
-  background:var(--surface); border-radius:10px; padding:20px;
-  border:1px solid var(--border-sub);
+/* ── Grid ── */
+.g-trio {{ display:grid; grid-template-columns: 1fr 1fr 1fr; gap:16px; height:260px; }}
+.g-trio .panel {{ display:flex; flex-direction:column; overflow:hidden; }}
+.g-trio .chart-wrap {{ flex:1; position:relative; min-height:0; }}
+
+/* ── Panels ── */
+.panel {{
+  background: var(--surface); padding: 16px; border-radius: 6px;
+  position: relative;
 }}
-.cb h3 {{
-  font-family:'Outfit',system-ui; font-size:0.7rem; font-weight:600;
-  color:var(--text-3); text-transform:uppercase; letter-spacing:0.05em;
-  margin-bottom:14px;
+.chart-wrap {{ position: relative; }}
+.panel-lbl {{
+  font-size: 0.72rem; font-weight: 500;
+  letter-spacing: 0; color: var(--ink-3); margin-bottom: 10px;
 }}
 
-/* Tables */
-.tw {{ overflow-x:auto; margin-top:16px; }}
-table {{ width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap; table-layout:fixed; }}
+/* ── Tables ── */
+.tw {{ overflow-x: auto; }}
+table {{ width:100%; border-collapse:collapse; font-size: 0.8rem; white-space:nowrap; }}
 th {{
-  text-align:left; padding:8px 12px;
-  font-family:'Outfit',system-ui; font-size:0.63rem; font-weight:600;
-  color:var(--text-3); text-transform:uppercase; letter-spacing:0.05em;
-  border-bottom:2px solid var(--border); overflow:hidden; text-overflow:ellipsis;
+  text-align:left; padding: 8px 10px;
+  font-size: 0.66rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--ink-3);
+  border-bottom: 1px solid var(--rule);
 }}
-td {{ padding:7px 12px; border-bottom:1px solid var(--border-sub); overflow:hidden; text-overflow:ellipsis; }}
-tr:hover td {{ background:var(--hover); }}
-.num {{ text-align:right; font-variant-numeric:tabular-nums; }}
-.cost-val {{ color:var(--success); font-weight:600; }}
+td {{ padding: 7px 10px; border-bottom: 1px solid var(--rule-light); }}
+tr:hover td {{ background: var(--hover); }}
+.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+.cost-val {{ color: var(--accent); font-weight: 600; }}
 code {{
-  background:var(--code-bg); padding:2px 6px; border-radius:4px;
-  font-size:0.72rem; font-family:'Menlo','Consolas',monospace;
+  background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
+  font-size: 0.72rem; font-family: 'SF Mono','Menlo','Consolas',monospace;
 }}
 
-/* Badges */
+/* ── Badges ── */
 .badge {{
-  display:inline-block; padding:2px 8px; border-radius:4px;
-  font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
+  display: inline-block; padding: 1px 4px; border-radius: 3px;
+  font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em;
+  vertical-align: 1px;
 }}
-.badge-claude  {{ background:var(--accent-s); color:var(--accent); }}
-.badge-opencode {{ background:var(--success-s); color:var(--success); }}
-.badge-codex   {{ background:var(--warn-s); color:var(--warn); }}
+.badge-claude  {{ background: oklch(52% 0.14 25 / 0.1); color: var(--red); }}
+.badge-opencode {{ background: var(--accent-dim); color: var(--accent); }}
+.badge-codex   {{ background: oklch(58% 0.12 75 / 0.1); color: var(--amber); }}
 
-.summary-cell {{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-2); }}
-.cat-row td {{ background:var(--surface); }}
+.summary-cell {{ max-width: 340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color: var(--ink-2); }}
+.sub {{ color: var(--ink-3); font-size: 0.70rem; }}
 
-.comp-bar {{ display:flex; height:7px; border-radius:4px; overflow:hidden; min-width:56px; background:var(--border-sub); }}
-.seg-in    {{ background:var(--accent); }}
-.seg-out   {{ background:var(--warn); }}
-.seg-cache {{ background:var(--muted); opacity:0.6; }}
+/* ── Trivial toggle ── */
+.trivial-toggle {{
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 0.74rem; color: var(--ink-3); padding: 8px 0; user-select: none;
+}}
+.trivial-toggle:hover {{ color: var(--ink-2); }}
+.trivial-toggle .arrow {{ display: inline-block; transition: transform 0.2s ease; font-size: 0.6rem; }}
+.trivial-toggle.open .arrow {{ transform: rotate(90deg); }}
+.trivial-body[hidden] {{ display: none; }}
+.trivial-body table {{ opacity: 0.45; }}
+.trivial-body tr:hover td {{ opacity: 1; }}
 
+/* ── Heatmap ── */
+.hm-wrap {{ display:flex; margin-bottom: 4px; }}
+.hm-days {{
+  display:flex; flex-direction:column; gap:3px; margin-right:5px;
+  font-size:0.52rem; color:var(--ink-3);
+}}
+.hm-days span {{ height:13px; line-height:13px; }}
+.hm-scroll {{ overflow-x:auto; }}
+.heatmap {{ display:flex; gap:3px; }}
+.heatmap-col {{ display:flex; flex-direction:column; gap:3px; }}
+.hm-cell {{
+  width:13px; height:13px; border-radius:2px;
+  background: var(--rule-light);
+}}
+.hm-cell[data-level="1"] {{ background:oklch(65% 0.08 155); }}
+.hm-cell[data-level="2"] {{ background:oklch(52% 0.11 155); }}
+.hm-cell[data-level="3"] {{ background:oklch(42% 0.14 155); }}
+.hm-cell[data-level="4"] {{ background:oklch(34% 0.16 155); }}
+[data-theme="dark"] .hm-cell {{ background:oklch(20% 0.005 155); }}
+[data-theme="dark"] .hm-cell[data-level="1"] {{ background:oklch(28% 0.06 155); }}
+[data-theme="dark"] .hm-cell[data-level="2"] {{ background:oklch(38% 0.10 155); }}
+[data-theme="dark"] .hm-cell[data-level="3"] {{ background:oklch(48% 0.13 155); }}
+[data-theme="dark"] .hm-cell[data-level="4"] {{ background:oklch(60% 0.15 155); }}
+.hm-legend {{
+  display:flex; align-items:center; gap:3px;
+  font-size:0.52rem; color:var(--ink-3);
+}}
+.hm-legend .hm-cell {{ width:10px; height:10px; }}
+
+/* ── Footer ── */
 footer {{
-  color:var(--text-3); font-size:0.72rem; padding:24px 0 8px;
-  border-top:1px solid var(--border-sub);
+  font-size: 0.72rem; color: var(--ink-3); padding: 20px 0 8px;
+  border-top: 1px solid var(--rule-light);
 }}
-footer a {{ color:var(--accent); text-decoration:none; }}
-footer a:hover {{ text-decoration:underline; }}
+footer a {{ color: var(--accent); text-decoration:none; }}
+footer a:hover {{ text-decoration: underline; }}
 
-/* Animations */
-@keyframes rise {{
-  from {{ opacity:0; transform:translateY(10px); }}
+/* ── Motion ── */
+@keyframes enter {{
+  from {{ opacity:0; transform:translateY(6px); }}
   to {{ opacity:1; transform:translateY(0); }}
 }}
-.metric {{ animation: rise 0.45s cubic-bezier(0.16,1,0.3,1) both; }}
-.metric:nth-child(1)  {{ animation-delay:0s; }}
-.metric:nth-child(3)  {{ animation-delay:0.04s; }}
-.metric:nth-child(5)  {{ animation-delay:0.08s; }}
-.metric:nth-child(7)  {{ animation-delay:0.12s; }}
-.metric:nth-child(9)  {{ animation-delay:0.16s; }}
-.metric:nth-child(11) {{ animation-delay:0.2s; }}
-.section {{ animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) both; animation-delay:0.15s; }}
+.summary {{ animation: enter 0.4s cubic-bezier(0.16,1,0.3,1) both; }}
+section:nth-of-type(1) {{ animation: enter 0.4s cubic-bezier(0.16,1,0.3,1) 0.04s both; }}
+section:nth-of-type(2) {{ animation: enter 0.4s cubic-bezier(0.16,1,0.3,1) 0.08s both; }}
+section:nth-of-type(3) {{ animation: enter 0.4s cubic-bezier(0.16,1,0.3,1) 0.12s both; }}
 
 @media (prefers-reduced-motion:reduce) {{
   *, *::before, *::after {{ animation-duration:0.01ms !important; transition-duration:0.01ms !important; }}
 }}
-@media (max-width:1100px) {{
-  .g21,.g12 {{ grid-template-columns:1fr; }}
-  .g3 {{ grid-template-columns:1fr 1fr; }}
+@media (max-width:960px) {{
+  .g-trio {{ grid-template-columns:1fr; }}
+  .summary {{ grid-template-columns:1fr; }}
 }}
-@media (max-width:768px) {{
+@media (max-width:600px) {{
   .page {{ padding:24px 16px; }}
-  .header {{ flex-direction:column; gap:12px; }}
-  .metrics {{ flex-direction:column; gap:20px; padding-bottom:24px; margin-bottom:32px; }}
-  .metric {{ padding:0; }}
-  .metric-sep {{ width:100%; height:1px; }}
-  .g3 {{ grid-template-columns:1fr; }}
-  .section {{ margin-bottom:32px; }}
+  .cost-big {{ font-size:2.2rem; }}
+  .summary-line {{ flex-direction: column; gap: 4px; }}
 }}
 </style>
 </head>
 <body>
 <div class="page">
 
-  <header class="header">
-    <div>
-      <h1>Voyage</h1>
-      <p class="subtitle">{period_tag} &middot; {now} &middot; {provider_count} provider(s) &middot; {project_count} project(s)</p>
-    </div>
-    <button class="theme-btn" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">&#9790;</button>
-  </header>
-
-  <div class="metrics">
-    <div class="metric"><div class="metric-val">${cost:.2}</div><div class="metric-lbl">Total Cost</div><div class="metric-sub">{cost_per_day}/day</div></div>
-    <div class="metric-sep"></div>
-    <div class="metric"><div class="metric-val">{total_tokens_fmt}</div><div class="metric-lbl">Tokens</div><div class="metric-sub">{input_fmt} in &middot; {output_fmt} out</div></div>
-    <div class="metric-sep"></div>
-    <div class="metric"><div class="metric-val">{session_count}</div><div class="metric-lbl">Sessions</div><div class="metric-sub">{total_turns} turns</div></div>
-    <div class="metric-sep"></div>
-    <div class="metric"><div class="metric-val">${avg_cost:.4}</div><div class="metric-lbl">Avg / Session</div><div class="metric-sub">{avg_tokens} tokens</div></div>
-    <div class="metric-sep"></div>
-    <div class="metric"><div class="metric-val">{cache_hit_rate:.1}%</div><div class="metric-lbl">Cache Hit Rate</div><div class="metric-sub">{cache_read_fmt} read &middot; {cache_write_fmt} write</div></div>
-    <div class="metric-sep"></div>
-    <div class="metric"><div class="metric-val">{model_count}</div><div class="metric-lbl">Models</div><div class="metric-sub">{top_model}</div></div>
+  <div class="masthead">
+    <div><span class="logo">Voyage</span><span class="logo-sub">{period_tag} &middot; {now}</span></div>
+    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">&#9790;</button>
   </div>
 
-  <section class="section">
-    <h2>Daily Overview</h2>
-    <div class="g21">
-      <div class="cb"><canvas id="cDaily" height="110"></canvas></div>
-      <div class="cb"><h3>Token Composition</h3><canvas id="cTokens"></canvas></div>
+  <div class="summary">
+    <div>
+      <div class="cost-big">${cost:.2}<span class="sub-period">{active_days} days</span></div>
+      <div class="summary-line">
+        <span><strong>{session_count}</strong> sessions</span>
+        <span><strong>{total_tokens_fmt}</strong> tokens</span>
+        <span><strong>{total_turns}</strong> turns at {format_cost_per_turn}/turn</span>
+        <span>cache <strong>{cache_hit_rate:.0}%</strong> hit, <span class="accent">{format_cost_savings} saved</span></span>
+      </div>
+    </div>
+    <div>
+      <div class="hm-wrap">
+        <div class="hm-days">
+          <span></span><span>M</span><span></span><span>W</span><span></span><span>F</span><span></span>
+        </div>
+        <div class="hm-scroll"><div class="heatmap" id="heatmap"></div></div>
+      </div>
+      <div class="hm-legend">
+        <span>Less</span>
+        <div class="hm-cell" data-level="0"></div>
+        <div class="hm-cell" data-level="1"></div>
+        <div class="hm-cell" data-level="2"></div>
+        <div class="hm-cell" data-level="3"></div>
+        <div class="hm-cell" data-level="4"></div>
+        <span>More</span>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-lbl">Daily Trend</div><div class="chart-wrap"><canvas id="cDaily" height="100"></canvas></div></div>
+    <div class="g-trio">
+      <div class="panel"><div class="panel-lbl">By Model</div><div class="chart-wrap"><canvas id="cModel"></canvas></div></div>
+      <div class="panel"><div class="panel-lbl">By Project</div><div class="chart-wrap"><canvas id="cProject"></canvas></div></div>
+      <div class="panel"><div class="panel-lbl">Top Tools <span class="count">({total_tool_calls} calls)</span></div><div class="chart-wrap"><canvas id="cTopTools"></canvas></div></div>
     </div>
   </section>
 
-  <section class="section">
-    <h2>Cost Breakdown</h2>
-    <div class="g3">
-      <div class="cb"><h3>By Model</h3><canvas id="cModel"></canvas></div>
-      <div class="cb"><h3>By Provider</h3><canvas id="cProvider"></canvas></div>
-      <div class="cb"><h3>By Project</h3><canvas id="cProject"></canvas></div>
-    </div>
-  </section>
-
-  <section class="section">
-    <h2>Token Volume</h2>
-    <div class="cb"><canvas id="cVolume" height="80"></canvas></div>
-  </section>
-
-  <section class="section">
-    <h2>Tool Usage</h2>
-    <div class="g12" style="margin-bottom:20px">
-      <div class="cb"><h3>By Category</h3><canvas id="cToolCat"></canvas></div>
-      <div class="cb"><h3>Top Tools ({total_tool_calls} calls)</h3><canvas id="cTopTools" height="100"></canvas></div>
-    </div>
+  <section>
+    <div class="sec-head">Projects</div>
     <div class="tw">
-      <table><colgroup><col style="width:10%"><col style="width:50%"><col style="width:20%"><col style="width:20%"></colgroup>
-      <thead><tr><th></th><th>Tool</th><th class="num">Calls</th><th class="num">Share</th></tr></thead>
-      <tbody>{tool_table_rows}</tbody></table>
-    </div>
-  </section>
-
-  <section class="section">
-    <h2>Projects</h2>
-    <div class="tw">
-      <table><colgroup><col style="width:40%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>
-      <thead><tr><th>Project</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Avg/Sess</th></tr></thead>
+      <table>
+      <thead><tr><th>Project</th><th class="num">Sess</th><th class="num">Turns</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">$/Turn</th></tr></thead>
       <tbody>{project_detail_rows}</tbody></table>
     </div>
   </section>
 
-  <section class="section">
-    <h2>Sessions <span class="ct">({session_count})</span></h2>
+  <section>
+    <div class="sec-head">Sessions <span class="count">({meaningful_count})</span></div>
     <div class="tw">
-      <table><colgroup><col style="width:6%"><col style="width:7%"><col style="width:16%"><col style="width:22%"><col style="width:11%"><col style="width:8%"><col style="width:5%"><col style="width:5%"><col style="width:7%"><col style="width:5%"><col style="width:8%"></colgroup>
-      <thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th class="num">Msgs</th><th class="num">Turns</th><th class="num">Tokens</th><th>Mix</th><th class="num">Cost</th></tr></thead>
+      <table>
+      <thead><tr><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead>
       <tbody>{session_table}</tbody></table>
     </div>
+    <div>
+      <span class="trivial-toggle" onclick="toggleTrivial()" id="trivialBtn"><span class="arrow">&#9654;</span> {trivial_count} trivial</span>
+      <div class="trivial-body" id="trivialBody" hidden>
+        <div class="tw">
+          <table>
+          <thead><tr><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead>
+          <tbody>{trivial_table}</tbody></table>
+        </div>
+      </div>
+    </div>
   </section>
+
 
   <footer>Generated by <a href="https://github.com/coldinke/Voyage">Voyage</a></footer>
 </div>
@@ -593,15 +571,15 @@ try {{
 function P() {{
   const dk = getTheme() === 'dark';
   return {{
-    accent:  dk ? '#c97a55' : '#a35a38',
-    success: dk ? '#5aaa74' : '#358a5a',
-    warn:    dk ? '#c5a44a' : '#9a7c28',
-    error:   dk ? '#c06858' : '#a04040',
-    muted:   dk ? '#7a88aa' : '#646c8a',
-    teal:    dk ? '#55a89a' : '#2a8a7a',
-    grid:    dk ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
-    text:    dk ? '#8a7a70' : '#7a6a60',
-    border:  dk ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
+    accent: dk ? '#50b880' : '#2a7a50',
+    red:    dk ? '#d07060' : '#a34030',
+    amber:  dk ? '#d0a850' : '#9a7a28',
+    teal:   dk ? '#50b0a0' : '#2a7a75',
+    blue:   dk ? '#7a9ac0' : '#3a5a90',
+    slate:  dk ? '#8a8a9a' : '#6a6a80',
+    grid:   dk ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
+    text:   dk ? '#887868' : '#685848',
+    border: dk ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
   }};
 }}
 
@@ -613,18 +591,17 @@ function refreshCharts() {{
   const p = P();
   Chart.defaults.color = p.text;
   Chart.defaults.borderColor = p.border;
-  Chart.defaults.font.family = "'DM Sans','Outfit',system-ui";
+  Chart.defaults.font.family = "'Figtree',system-ui";
   Chart.defaults.font.size = 11;
-  const donut = {{ cutout:'65%', plugins:{{ legend:{{ position:'bottom', labels:{{ padding:12, usePointStyle:true, pointStyle:'circle', font:{{ size:11 }} }} }} }} }};
+  const pal = [p.accent, p.red, p.amber, p.teal, p.blue, p.slate];
 
   charts.push(new Chart(document.getElementById('cDaily'), {{
     type:'bar',
     data:{{
       labels:[{daily_labels}],
       datasets:[
-        {{ label:'Cost ($)', data:[{daily_costs}], backgroundColor:p.success+'aa', borderRadius:4, yAxisID:'y', order:2 }},
-        {{ label:'Sessions', data:[{daily_sessions}], type:'line', borderColor:p.accent, backgroundColor:p.accent+'18', pointRadius:2.5, pointBackgroundColor:p.accent, tension:0.4, yAxisID:'y1', order:1, fill:true }},
-        {{ label:'Turns', data:[{daily_turns}], type:'line', borderColor:p.muted, borderDash:[4,4], pointRadius:0, tension:0.4, yAxisID:'y1', order:0 }}
+        {{ label:'Cost ($)', data:[{daily_costs}], backgroundColor:p.accent+'88', borderRadius:2, yAxisID:'y', order:2 }},
+        {{ label:'Sessions', data:[{daily_sessions}], type:'line', borderColor:p.red, backgroundColor:p.red+'10', pointRadius:1.5, pointBackgroundColor:p.red, tension:0.4, yAxisID:'y1', order:1, fill:true, borderWidth:1.5 }}
       ]
     }},
     options:{{
@@ -638,121 +615,111 @@ function refreshCharts() {{
     }}
   }}));
 
-  charts.push(new Chart(document.getElementById('cTokens'), {{
-    type:'doughnut',
-    data:{{ labels:[{token_breakdown_labels}], datasets:[{{ data:[{token_breakdown_data}], backgroundColor:[p.accent,p.warn,p.muted,p.teal], borderWidth:0 }}] }},
-    options:donut
-  }}));
-
   charts.push(new Chart(document.getElementById('cModel'), {{
     type:'doughnut',
-    data:{{ labels:[{model_labels}], datasets:[{{ data:[{model_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}] }},
-    options:donut
-  }}));
-
-  charts.push(new Chart(document.getElementById('cProvider'), {{
-    type:'doughnut',
-    data:{{ labels:[{provider_labels}], datasets:[{{ data:[{provider_costs}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted], borderWidth:0 }}] }},
-    options:donut
+    data:{{ labels:[{model_labels}], datasets:[{{ data:[{model_costs}], backgroundColor:pal, borderWidth:0 }}] }},
+    options:{{ cutout:'62%', maintainAspectRatio:false, plugins:{{ legend:{{ position:'bottom', labels:{{ padding:6, usePointStyle:true, pointStyle:'circle', font:{{ size:9 }} }} }} }} }}
   }}));
 
   charts.push(new Chart(document.getElementById('cProject'), {{
     type:'bar',
-    data:{{ labels:[{proj_labels}], datasets:[{{ label:'Cost ($)', data:[{proj_costs}], backgroundColor:p.accent+'bb', borderRadius:4 }}] }},
-    options:{{ indexAxis:'y', plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ grid:{{ color:p.grid }}, ticks:{{ callback:v=>'$'+v }} }}, y:{{ grid:{{ display:false }} }} }} }}
-  }}));
-
-  charts.push(new Chart(document.getElementById('cVolume'), {{
-    type:'bar',
-    data:{{
-      labels:[{daily_labels}],
-      datasets:[
-        {{ label:'Input (K)', data:[{daily_input}], backgroundColor:p.accent+'88', borderRadius:3 }},
-        {{ label:'Output (K)', data:[{daily_output}], backgroundColor:p.warn+'88', borderRadius:3 }}
-      ]
-    }},
-    options:{{
-      scales:{{ x:{{ stacked:true, grid:{{ display:false }} }}, y:{{ stacked:true, grid:{{ color:p.grid }}, ticks:{{ callback:v=>v+'K' }} }} }},
-      plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:12 }} }} }}
-    }}
-  }}));
-
-  charts.push(new Chart(document.getElementById('cToolCat'), {{
-    type:'doughnut',
-    data:{{ labels:[{cat_labels}], datasets:[{{ data:[{cat_data}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}] }},
-    options:donut
+    data:{{ labels:[{proj_labels}], datasets:[{{ data:[{proj_costs}], backgroundColor:p.accent+'aa', borderRadius:3 }}] }},
+    options:{{ indexAxis:'y', maintainAspectRatio:false, plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ grid:{{ color:p.grid }}, ticks:{{ callback:v=>'$'+v, maxTicksLimit:4 }} }}, y:{{ grid:{{ display:false }}, ticks:{{ font:{{ size:10 }} }} }} }} }}
   }}));
 
   charts.push(new Chart(document.getElementById('cTopTools'), {{
     type:'bar',
-    data:{{ labels:[{top_tool_labels}], datasets:[{{ label:'Calls', data:[{top_tool_data}], backgroundColor:p.accent+'bb', borderRadius:4 }}] }},
-    options:{{ indexAxis:'y', plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ grid:{{ color:p.grid }} }}, y:{{ grid:{{ display:false }} }} }} }}
+    data:{{ labels:[{top_tool_labels}], datasets:[{{ data:[{top_tool_data}], backgroundColor:p.slate+'88', borderRadius:3 }}] }},
+    options:{{ indexAxis:'y', maintainAspectRatio:false, plugins:{{ legend:{{ display:false }} }}, scales:{{ x:{{ grid:{{ color:p.grid }}, ticks:{{ maxTicksLimit:4 }} }}, y:{{ grid:{{ display:false }}, ticks:{{ font:{{ size:10 }} }} }} }} }}
   }}));
 }}
 
 refreshCharts();
+
+(function() {{
+  const data = [{heatmap_data}];
+  const map = new Map(data);
+  const container = document.getElementById('heatmap');
+  if (!container) return;
+  // Show at least 90 days so the heatmap has visual density
+  const hmDays = Math.max({heatmap_days}, 90);
+  const endDate = new Date(); endDate.setHours(0,0,0,0);
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - hmDays + 1);
+  const start = new Date(startDate);
+  start.setDate(start.getDate() - start.getDay());
+  const end = new Date(endDate);
+  end.setDate(end.getDate() + (6 - end.getDay()));
+  const cur = new Date(start);
+  let col = null;
+  while (cur <= end) {{
+    if (cur.getDay() === 0) {{
+      col = document.createElement('div');
+      col.className = 'heatmap-col';
+      container.appendChild(col);
+    }}
+    const ds = cur.toISOString().slice(0, 10);
+    const count = map.get(ds) || 0;
+    const cell = document.createElement('div');
+    cell.className = 'hm-cell';
+    const level = count === 0 ? 0 : count <= 2 ? 1 : count <= 4 ? 2 : count <= 6 ? 3 : 4;
+    cell.setAttribute('data-level', level);
+    cell.title = ds + ': ' + count + ' session(s)';
+    col.appendChild(cell);
+    cur.setDate(cur.getDate() + 1);
+  }}
+}})();
+
+function toggleTrivial() {{
+  const btn = document.getElementById('trivialBtn');
+  const body = document.getElementById('trivialBody');
+  const open = body.hidden;
+  body.hidden = !open;
+  btn.classList.toggle('open', open);
+}}
 </script>
 </body>
 </html>"##,
         period_tag = if since.is_none() {
             "All time".to_string()
         } else {
-            format!("Last {days} day(s)")
+            format!("Last {} days", days)
         },
-        now = Utc::now().format("%Y-%m-%d %H:%M UTC"),
-        provider_count = by_provider.len(),
-        project_count = projects.len(),
+        now = Utc::now().format("%Y-%m-%d"),
         cost = overall.total_cost_usd,
-        cost_per_day = if days > 0 {
-            format!("${:.2}", overall.total_cost_usd / days as f64)
-        } else {
-            "$0".into()
-        },
-        total_tokens_fmt = format_tokens(total_tokens),
-        input_fmt = format_tokens(overall.input_tokens),
-        output_fmt = format_tokens(overall.output_tokens),
         session_count = overall.session_count,
-        total_turns = sessions.iter().map(|s| s.turn_count as u64).sum::<u64>(),
-        avg_cost = avg_cost,
-        avg_tokens = format_tokens(if overall.session_count > 0 {
-            total_tokens / overall.session_count
-        } else {
-            0
-        }),
-        cache_read_fmt = format_tokens(overall.cache_read_tokens),
-        cache_write_fmt = format_tokens(overall.cache_creation_tokens),
+        total_tokens_fmt = format_tokens(total_tokens),
+        total_turns = total_turns,
+        active_days = active_days,
+        format_cost_per_turn = format_cost(cost_per_turn),
+        format_cost_savings = format_cost(cache_savings),
         cache_hit_rate = cache_hit_rate,
-        model_count = by_model.len(),
-        top_model = by_model.first().map(|m| m.model.as_str()).unwrap_or("-"),
         daily_labels = daily_labels,
         daily_costs = daily_costs,
         daily_sessions = daily_sessions,
-        daily_input = daily_input,
-        daily_output = daily_output,
-        daily_turns = daily_turns,
-        token_breakdown_labels = token_breakdown_labels,
-        token_breakdown_data = token_breakdown_data,
         model_labels = model_labels,
         model_costs = model_costs,
-        provider_labels = provider_labels,
-        provider_costs = provider_costs,
         proj_labels = proj_labels,
         proj_costs = proj_costs,
         project_detail_rows = project_detail_rows,
         session_table = session_rows,
+        meaningful_count = meaningful_count,
+        trivial_count = trivial_count,
+        trivial_table = trivial_rows,
         total_tool_calls = format_tokens(total_tool_calls),
-        tool_table_rows = tool_table_rows,
-        cat_labels = cat_labels,
-        cat_data = cat_data,
         top_tool_labels = top_tool_labels,
         top_tool_data = top_tool_data,
+        heatmap_data = heatmap_data,
+        heatmap_days = days,
     );
 
-    let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join("voyage-report.html")
-    });
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("voyage-report.html")
+        });
 
     std::fs::write(&output_path, &html)?;
     println!("Report generated: {}", output_path.display());
@@ -783,11 +750,37 @@ fn format_tokens(n: u64) -> String {
     }
 }
 
+fn format_cost(v: f64) -> String {
+    if v == 0.0 {
+        "$0".to_string()
+    } else if v < 0.005 {
+        "<$0.01".to_string()
+    } else if v < 10.0 {
+        format!("${:.2}", v)
+    } else {
+        format!("${:.0}", v)
+    }
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Clean noisy session summaries (e.g. system-prompt boilerplate).
+fn clean_session_summary(s: &str) -> String {
+    let s = s.trim();
+    if s.starts_with("# AGENTS.md instructions") || s.starts_with("# agents.md instructions") {
+        "(auto-start)".to_string()
+    } else if s.starts_with("<INSTRUCTION>") || s.starts_with("<instruction>") {
+        "(auto-start)".to_string()
+    } else if s.is_empty() {
+        "(no summary)".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {
@@ -802,14 +795,88 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     format!("{prefix}...")
 }
 
-fn shorten_path(s: &str, max: usize) -> String {
-    let len = s.chars().count();
-    if len <= max {
-        s.to_string()
-    } else if max <= 3 {
-        s.chars().take(max).collect()
+/// Extract a human-readable project name from a path.
+/// "/Users/vinci/lab/center" → "center"
+/// "/Users/vinci/lab/center/backend" → "center/backend"
+/// "subagents" → "subagents"
+fn project_display_name(s: &str) -> String {
+    let path = std::path::Path::new(s);
+    let components: Vec<_> = path
+        .components()
+        .filter_map(|c| {
+            if let std::path::Component::Normal(os) = c {
+                os.to_str()
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if components.len() <= 1 {
+        return s.to_string();
+    }
+
+    // Find index after known prefixes like "Users/xxx/lab" or "Users/xxx"
+    let skip = if components.len() >= 3
+        && components[0] == "Users"
+        && (components.get(2) == Some(&"lab")
+            || components.get(2) == Some(&"opens")
+            || components.get(2) == Some(&"work"))
+    {
+        3
+    } else if components.len() >= 2 && components[0] == "Users" {
+        2
     } else {
-        let tail: String = s.chars().skip(len - (max - 3)).collect();
-        format!("...{tail}")
+        // Keep last 2 components at most
+        components.len().saturating_sub(2)
+    };
+
+    let tail: Vec<_> = components[skip..].to_vec();
+    if tail.is_empty() {
+        components.last().unwrap_or(&s).to_string()
+    } else {
+        tail.join("/")
     }
 }
+
+/// Shorten model names for chart legends.
+/// "claude-sonnet-4-5-20250929" → "sonnet-4.5"
+/// "claude-opus-4-6" → "opus-4.6"
+/// "gpt-5.3-codex" → "gpt-5.3"
+/// "big-pickle" → "big-pickle"
+fn short_model_name(s: &str) -> String {
+    let s = s.trim();
+    // Strip date suffix: "-20250929", "-20251001" etc.
+    let base = if s.len() > 9 {
+        let tail = &s[s.len() - 9..];
+        if tail.starts_with('-')
+            && tail[1..].chars().all(|c| c.is_ascii_digit())
+            && tail.len() == 9
+        {
+            &s[..s.len() - 9]
+        } else {
+            s
+        }
+    } else {
+        s
+    };
+    // Strip "claude-" prefix
+    let base = base.strip_prefix("claude-").unwrap_or(base);
+    // Normalize version separators: "4-5" → "4.5", "4-6" → "4.6"
+    // Match pattern: word-digit-digit at the end
+    let re_version = |b: &str| -> String {
+        let bytes = b.as_bytes();
+        let len = bytes.len();
+        if len >= 3
+            && bytes[len - 1].is_ascii_digit()
+            && bytes[len - 2] == b'-'
+            && bytes[len - 3].is_ascii_digit()
+        {
+            format!("{}.{}", &b[..len - 2], &b[len - 1..])
+        } else {
+            b.to_string()
+        }
+    };
+    re_version(base)
+}
+
