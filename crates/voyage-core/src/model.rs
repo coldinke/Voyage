@@ -18,7 +18,7 @@ pub enum Role {
     System,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -38,17 +38,6 @@ impl TokenUsage {
             + self.cache_read_tokens as f64 * cache_read_rate
             + self.cache_creation_tokens as f64 * cache_write_rate)
             / 1_000_000.0
-    }
-}
-
-impl Default for TokenUsage {
-    fn default() -> Self {
-        Self {
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-        }
     }
 }
 
@@ -129,10 +118,10 @@ impl Session {
         if msg.role == Role::Assistant {
             self.turn_count += 1;
         }
-        if let Some(ref m) = msg.model {
-            if self.model.is_empty() {
-                self.model = m.clone();
-            }
+        if let Some(ref m) = msg.model
+            && self.model.is_empty()
+        {
+            self.model = m.clone();
         }
         self.estimated_cost_usd = self.usage.estimated_cost_usd(&self.model);
         match self.ended_at {
@@ -187,16 +176,16 @@ pub fn truncate_at_boundary(s: &str, max: usize) -> String {
     // Find a good break point: sentence end (. ! ?) or last space
     let region = &s[..max];
     // Try sentence boundary first
-    if let Some(pos) = region.rfind(|c: char| c == '.' || c == '!' || c == '?') {
-        if pos > max / 3 {
-            return s[..=pos].to_string();
-        }
+    if let Some(pos) = region.rfind(['.', '!', '?'])
+        && pos > max / 3
+    {
+        return s[..=pos].to_string();
     }
     // Fall back to word boundary
-    if let Some(pos) = region.rfind(' ') {
-        if pos > max / 3 {
-            return format!("{}...", &s[..pos]);
-        }
+    if let Some(pos) = region.rfind(' ')
+        && pos > max / 3
+    {
+        return format!("{}...", &s[..pos]);
     }
     // Hard truncate (max is already on a char boundary)
     format!("{}...", &s[..max])

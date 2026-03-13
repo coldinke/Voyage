@@ -29,7 +29,7 @@ pub fn run(data_dir: &Path, query: &str, limit: usize) -> Result<(), Box<dyn std
     }
 
     println!("\nSearch results for \"{}\" ({} indexed):\n", query, count);
-    println!("{:<6} {:<38} {}", "Score", "Session", "Content");
+    println!("{:<6} {:<38} Content", "Score", "Session");
     println!("{}", "-".repeat(100));
 
     for r in &results {

@@ -87,6 +87,12 @@ struct RawPart {
 
 pub struct OpenCodeParser;
 
+impl Default for OpenCodeParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenCodeParser {
     pub fn new() -> Self {
         Self
@@ -230,17 +236,17 @@ impl OpenCodeParser {
             if let Ok(part) = read_json::<RawPart>(pf) {
                 match part.part_type.as_str() {
                     "text" => {
-                        if let Some(text) = part.text {
-                            if !text.is_empty() {
-                                texts.push(text);
-                            }
+                        if let Some(text) = part.text
+                            && !text.is_empty()
+                        {
+                            texts.push(text);
                         }
                     }
                     "tool" => {
-                        if let Some(name) = part.name.or(part.tool) {
-                            if !tools.contains(&name) {
-                                tools.push(name);
-                            }
+                        if let Some(name) = part.name.or(part.tool)
+                            && !tools.contains(&name)
+                        {
+                            tools.push(name);
                         }
                     }
                     _ => {}

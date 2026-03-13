@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn list_sessions_with_limit() {
-        let mut store = SqliteStore::open_in_memory().unwrap();
+        let store = SqliteStore::open_in_memory().unwrap();
         for i in 0..5 {
             let mut s = sample_session();
             s.id = Uuid::new_v4();

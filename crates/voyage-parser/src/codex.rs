@@ -93,6 +93,12 @@ struct TotalTokenUsage {
 
 pub struct CodexParser;
 
+impl Default for CodexParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CodexParser {
     pub fn new() -> Self {
         Self
@@ -126,77 +132,74 @@ impl CodexParser {
                     }
                 }
                 "turn_context" => {
-                    if let Ok(ctx) = serde_json::from_value::<TurnContext>(raw.payload) {
-                        if model.is_none() {
-                            model = ctx.model;
-                        }
+                    if let Ok(ctx) = serde_json::from_value::<TurnContext>(raw.payload)
+                        && model.is_none()
+                    {
+                        model = ctx.model;
                     }
                 }
                 "response_item" => {
-                    if let Ok(item) = serde_json::from_value::<ResponseItemPayload>(raw.payload) {
-                        if item.item_type == "message" {
-                            if let Some(ref role_str) = item.role {
-                                let role = match role_str.as_str() {
-                                    "assistant" => Role::Assistant,
-                                    "developer" => continue, // skip system/developer messages
-                                    _ => Role::User,
-                                };
+                    if let Ok(item) = serde_json::from_value::<ResponseItemPayload>(raw.payload)
+                        && item.item_type == "message"
+                        && let Some(ref role_str) = item.role
+                    {
+                        let role = match role_str.as_str() {
+                            "assistant" => Role::Assistant,
+                            "developer" => continue, // skip system/developer messages
+                            _ => Role::User,
+                        };
 
-                                let content = item
-                                    .content
-                                    .as_ref()
-                                    .map(|items| {
-                                        items
-                                            .iter()
-                                            .filter_map(|c| c.text.as_deref())
-                                            .collect::<Vec<_>>()
-                                            .join("\n")
-                                    })
-                                    .unwrap_or_default();
+                        let content = item
+                            .content
+                            .as_ref()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(|c| c.text.as_deref())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default();
 
-                                if content.is_empty() {
-                                    continue;
-                                }
-
-                                let timestamp = DateTime::parse_from_rfc3339(&raw.timestamp)
-                                    .map(|t| t.with_timezone(&Utc))
-                                    .unwrap_or_else(|_| Utc::now());
-
-                                let tool_calls: Vec<String> = item
-                                    .content
-                                    .as_ref()
-                                    .map(|items| {
-                                        items
-                                            .iter()
-                                            .filter(|c| c.content_type == "tool_call")
-                                            .filter_map(|c| c.text.clone())
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-
-                                messages.push(Message {
-                                    id: Uuid::new_v4(),
-                                    session_id,
-                                    role,
-                                    content,
-                                    usage: TokenUsage::default(),
-                                    model: model.clone(),
-                                    tool_calls,
-                                    timestamp,
-                                });
-                            }
+                        if content.is_empty() {
+                            continue;
                         }
+
+                        let timestamp = DateTime::parse_from_rfc3339(&raw.timestamp)
+                            .map(|t| t.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now());
+
+                        let tool_calls: Vec<String> = item
+                            .content
+                            .as_ref()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter(|c| c.content_type == "tool_call")
+                                    .filter_map(|c| c.text.clone())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        messages.push(Message {
+                            id: Uuid::new_v4(),
+                            session_id,
+                            role,
+                            content,
+                            usage: TokenUsage::default(),
+                            model: model.clone(),
+                            tool_calls,
+                            timestamp,
+                        });
                     }
                 }
                 "event_msg" => {
-                    if let Ok(evt) = serde_json::from_value::<EventMsgPayload>(raw.payload) {
-                        if evt.event_type == "token_count" {
-                            if let Some(info) = evt.info {
-                                if let Some(usage) = info.total_token_usage {
-                                    last_total_usage = Some(usage);
-                                }
-                            }
-                        }
+                    if let Ok(evt) = serde_json::from_value::<EventMsgPayload>(raw.payload)
+                        && evt.event_type == "token_count"
+                        && let Some(info) = evt.info
+                        && let Some(usage) = info.total_token_usage
+                    {
+                        last_total_usage = Some(usage);
                     }
                 }
                 _ => {}

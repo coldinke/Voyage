@@ -81,6 +81,12 @@ struct RawUsage {
 
 pub struct ClaudeCodeParser;
 
+impl Default for ClaudeCodeParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClaudeCodeParser {
     pub fn new() -> Self {
         Self
@@ -129,10 +135,10 @@ impl ClaudeCodeParser {
                         first_timestamp = Some(timestamp);
                         session.started_at = timestamp;
                     }
-                    if session.cwd.is_empty() {
-                        if let Some(ref c) = cwd {
-                            session.cwd = c.clone();
-                        }
+                    if session.cwd.is_empty()
+                        && let Some(ref c) = cwd
+                    {
+                        session.cwd = c.clone();
                     }
                     if session.git_branch.is_none() {
                         session.git_branch = git_branch;
@@ -172,12 +178,12 @@ impl ClaudeCodeParser {
                     let content = raw_msg
                         .content
                         .as_ref()
-                        .map(|c| extract_assistant_content(c))
+                        .map(extract_assistant_content)
                         .unwrap_or_default();
                     let tool_calls = raw_msg
                         .content
                         .as_ref()
-                        .map(|c| extract_tool_calls(c))
+                        .map(extract_tool_calls)
                         .unwrap_or_default();
 
                     let msg = Message {
@@ -445,9 +451,9 @@ mod tests {
 
     #[test]
     fn parse_real_session_file() {
-        let real_path = PathBuf::from(dirs_next::home_dir().unwrap().join(
+        let real_path = dirs_next::home_dir().unwrap().join(
             ".claude/projects/-Users-vinci-lab-Voyage/9550f7c1-2907-414c-8527-eb992e7af55d.jsonl",
-        ));
+        );
         if !real_path.exists() {
             // Skip if not on the dev machine
             return;
