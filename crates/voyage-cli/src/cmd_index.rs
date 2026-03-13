@@ -5,6 +5,12 @@ use voyage_embed::{Embedder, EmbeddingModel};
 use voyage_store::sqlite::SqliteStore;
 use voyage_store::vectors::VectorStore;
 
+fn embedding_model_error(context: &str, err: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(format!(
+        "{context}: {err}. On first run, Voyage needs network access to download the embedding model, or an existing fastembed cache."
+    ))
+}
+
 /// Build semantic embedding text from a session and its messages.
 fn build_embedding_text(session: &Session, store: &SqliteStore) -> String {
     let mut parts = Vec::new();
@@ -74,7 +80,8 @@ pub fn run(data_dir: &Path, reindex: bool) -> Result<(), Box<dyn std::error::Err
     }
 
     println!("Loading embedding model...");
-    let embedder = Embedder::new(EmbeddingModel::AllMiniLmL6V2)?;
+    let embedder = Embedder::new(EmbeddingModel::AllMiniLmL6V2)
+        .map_err(|e| embedding_model_error("Failed to load embedding model", e))?;
 
     // Get all sessions
     let sessions = store.list_sessions(None, None, 10000)?;

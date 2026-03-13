@@ -125,11 +125,27 @@ impl SqliteStore {
 
     pub fn insert_session(&self, session: &Session) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO sessions
+            "INSERT INTO sessions
              (id, project, provider, model, started_at, ended_at, cwd, git_branch,
               input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
               estimated_cost_usd, message_count, turn_count, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             ON CONFLICT(id) DO UPDATE SET
+                 project = excluded.project,
+                 provider = excluded.provider,
+                 model = excluded.model,
+                 started_at = excluded.started_at,
+                 ended_at = excluded.ended_at,
+                 cwd = excluded.cwd,
+                 git_branch = excluded.git_branch,
+                 input_tokens = excluded.input_tokens,
+                 output_tokens = excluded.output_tokens,
+                 cache_read_tokens = excluded.cache_read_tokens,
+                 cache_creation_tokens = excluded.cache_creation_tokens,
+                 estimated_cost_usd = excluded.estimated_cost_usd,
+                 message_count = excluded.message_count,
+                 turn_count = excluded.turn_count,
+                 summary = excluded.summary",
             params![
                 session.id.to_string(),
                 session.project,
@@ -156,10 +172,21 @@ impl SqliteStore {
         let tool_calls_json =
             serde_json::to_string(&msg.tool_calls).unwrap_or_else(|_| "[]".into());
         self.conn.execute(
-            "INSERT OR REPLACE INTO messages
+            "INSERT INTO messages
              (id, session_id, role, content, input_tokens, output_tokens,
               cache_read_tokens, cache_creation_tokens, model, tool_calls_json, timestamp)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(id) DO UPDATE SET
+                 session_id = excluded.session_id,
+                 role = excluded.role,
+                 content = excluded.content,
+                 input_tokens = excluded.input_tokens,
+                 output_tokens = excluded.output_tokens,
+                 cache_read_tokens = excluded.cache_read_tokens,
+                 cache_creation_tokens = excluded.cache_creation_tokens,
+                 model = excluded.model,
+                 tool_calls_json = excluded.tool_calls_json,
+                 timestamp = excluded.timestamp",
             params![
                 msg.id.to_string(),
                 msg.session_id.to_string(),
@@ -184,11 +211,27 @@ impl SqliteStore {
     ) -> Result<(), StoreError> {
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT OR REPLACE INTO sessions
+            "INSERT INTO sessions
              (id, project, provider, model, started_at, ended_at, cwd, git_branch,
               input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
               estimated_cost_usd, message_count, turn_count, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             ON CONFLICT(id) DO UPDATE SET
+                 project = excluded.project,
+                 provider = excluded.provider,
+                 model = excluded.model,
+                 started_at = excluded.started_at,
+                 ended_at = excluded.ended_at,
+                 cwd = excluded.cwd,
+                 git_branch = excluded.git_branch,
+                 input_tokens = excluded.input_tokens,
+                 output_tokens = excluded.output_tokens,
+                 cache_read_tokens = excluded.cache_read_tokens,
+                 cache_creation_tokens = excluded.cache_creation_tokens,
+                 estimated_cost_usd = excluded.estimated_cost_usd,
+                 message_count = excluded.message_count,
+                 turn_count = excluded.turn_count,
+                 summary = excluded.summary",
             params![
                 session.id.to_string(),
                 session.project,
@@ -213,10 +256,21 @@ impl SqliteStore {
             let tool_calls_json =
                 serde_json::to_string(&msg.tool_calls).unwrap_or_else(|_| "[]".into());
             tx.execute(
-                "INSERT OR REPLACE INTO messages
+                "INSERT INTO messages
                  (id, session_id, role, content, input_tokens, output_tokens,
                   cache_read_tokens, cache_creation_tokens, model, tool_calls_json, timestamp)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT(id) DO UPDATE SET
+                     session_id = excluded.session_id,
+                     role = excluded.role,
+                     content = excluded.content,
+                     input_tokens = excluded.input_tokens,
+                     output_tokens = excluded.output_tokens,
+                     cache_read_tokens = excluded.cache_read_tokens,
+                     cache_creation_tokens = excluded.cache_creation_tokens,
+                     model = excluded.model,
+                     tool_calls_json = excluded.tool_calls_json,
+                     timestamp = excluded.timestamp",
                 params![
                     msg.id.to_string(),
                     msg.session_id.to_string(),
@@ -683,6 +737,29 @@ mod tests {
 
         let retrieved = store.get_session(&session.id).unwrap().unwrap();
         assert_eq!(retrieved.id, session.id);
+    }
+
+    #[test]
+    fn insert_session_with_messages_updates_existing_rows() {
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let mut session = sample_session();
+        session.message_count = 1;
+
+        let msg1 = sample_message(session.id);
+        store
+            .insert_session_with_messages(&session, std::slice::from_ref(&msg1))
+            .unwrap();
+
+        session.message_count = 2;
+        let msg2 = sample_message(session.id);
+        store
+            .insert_session_with_messages(&session, &[msg1, msg2])
+            .unwrap();
+
+        let retrieved = store.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(retrieved.message_count, 2);
+        let messages = store.get_messages_by_session(&session.id, 10).unwrap();
+        assert_eq!(messages.len(), 2);
     }
 
     #[test]

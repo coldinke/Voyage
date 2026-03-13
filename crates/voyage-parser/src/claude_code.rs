@@ -131,6 +131,12 @@ impl ClaudeCodeParser {
                     git_branch,
                     ..
                 } => {
+                    // Claude occasionally appends interrupted or sidechain records from a
+                    // different session into the same JSONL file. Skip them instead of
+                    // poisoning the parsed session or tripping DB foreign keys.
+                    if sid != session_id {
+                        continue;
+                    }
                     if first_timestamp.is_none() {
                         first_timestamp = Some(timestamp);
                         session.started_at = timestamp;
@@ -147,7 +153,7 @@ impl ClaudeCodeParser {
                     let content = extract_text_content(&raw_msg.content);
                     let msg = Message {
                         id: uuid,
-                        session_id: sid,
+                        session_id,
                         role: Role::User,
                         content,
                         usage: TokenUsage::default(),
@@ -165,6 +171,9 @@ impl ClaudeCodeParser {
                     timestamp,
                     ..
                 } => {
+                    if sid != session_id {
+                        continue;
+                    }
                     let usage = raw_msg
                         .usage
                         .map(|u| TokenUsage {
@@ -188,7 +197,7 @@ impl ClaudeCodeParser {
 
                     let msg = Message {
                         id: uuid,
-                        session_id: sid,
+                        session_id,
                         role: Role::Assistant,
                         content,
                         usage,
@@ -390,6 +399,25 @@ mod tests {
 
         assert_eq!(session.message_count, 0);
         assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn parse_skips_records_from_other_session() {
+        let foreign_user = r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"ignore me"},"uuid":"a989fd6e-cc80-4861-a21a-9a96dc1eb1e6","timestamp":"2026-03-12T13:17:35.480Z","userType":"external","cwd":"/Users/test","sessionId":"11111111-1111-1111-1111-111111111111","version":"2.1.74","gitBranch":"main"}"#;
+        let local_user = r#"{"parentUuid":"a989fd6e-cc80-4861-a21a-9a96dc1eb1e6","isSidechain":false,"type":"user","message":{"role":"user","content":"keep me"},"uuid":"b989fd6e-cc80-4861-a21a-9a96dc1eb1e7","timestamp":"2026-03-12T13:18:00.000Z","userType":"external","cwd":"/Users/test","sessionId":"9550f7c1-2907-414c-8527-eb992e7af55d","version":"2.1.74","gitBranch":"main"}"#;
+
+        let (_dir, path) = make_session_jsonl(&[foreign_user, local_user]);
+        let parser = ClaudeCodeParser::new();
+        let (session, messages) = parser.parse_session(&path).unwrap();
+
+        assert_eq!(session.message_count, 1);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "keep me");
+        assert_eq!(
+            messages[0].session_id.to_string(),
+            "9550f7c1-2907-414c-8527-eb992e7af55d"
+        );
+        assert_eq!(session.started_at, messages[0].timestamp);
     }
 
     #[test]

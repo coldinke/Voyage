@@ -118,11 +118,7 @@ pub fn run(
     let proj_labels: String = top_projects
         .iter()
         .map(|(name, _)| {
-            let short = if name.len() > 35 {
-                format!("...{}", &name[name.len() - 32..])
-            } else {
-                name.clone()
-            };
+            let short = shorten_path(name, 35);
             format!("\"{short}\"")
         })
         .collect::<Vec<_>>()
@@ -152,18 +148,10 @@ pub fn run(
             voyage_core::model::Provider::OpenCode => r#"<span class="badge badge-opencode">OpenCode</span>"#,
             voyage_core::model::Provider::Codex => r#"<span class="badge badge-codex">Codex</span>"#,
         };
-        let summary_short = if s.summary.len() > 60 {
-            format!("{}...", &s.summary[..57])
-        } else {
-            s.summary.clone()
-        };
+        let summary_short = truncate_chars(&s.summary, 60);
         let summary_escaped = html_escape(&s.summary);
         let summary_short_escaped = html_escape(&summary_short);
-        let model_short = if s.model.len() > 20 {
-            format!("{}...", &s.model[..17])
-        } else {
-            s.model.clone()
-        };
+        let model_short = truncate_chars(&s.model, 20);
         let input_pct = if total > 0 { (s.usage.input_tokens as f64 / total as f64 * 100.0) as u32 } else { 0 };
         let output_pct = if total > 0 { (s.usage.output_tokens as f64 / total as f64 * 100.0) as u32 } else { 0 };
         let cache_pct = 100u32.saturating_sub(input_pct).saturating_sub(output_pct);
@@ -184,7 +172,7 @@ pub fn run(
             </tr>"#,
             id = &s.id.to_string()[..8],
             provider = provider_badge,
-            project_full = s.project,
+            project_full = html_escape(&s.project),
             project = project_short,
             summary_full = summary_escaped,
             summary = summary_short_escaped,
@@ -204,7 +192,7 @@ pub fn run(
         let total = stats.0 + stats.1;
         format!(
             r#"<tr><td title="{name}">{short}</td><td class="num">{sessions}</td><td class="num">{turns}</td><td class="num">{tokens}</td><td class="num cost-val">${cost:.4}</td><td class="num">${avg:.4}</td></tr>"#,
-            name = name,
+            name = html_escape(name),
             short = shorten_path(name, 50),
             sessions = stats.3,
             turns = stats.4,
@@ -676,10 +664,26 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    let len = s.chars().count();
+    if len <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return s.chars().take(max_chars).collect();
+    }
+    let prefix: String = s.chars().take(max_chars - 3).collect();
+    format!("{prefix}...")
+}
+
 fn shorten_path(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let len = s.chars().count();
+    if len <= max {
         s.to_string()
+    } else if max <= 3 {
+        s.chars().take(max).collect()
     } else {
-        format!("...{}", &s[s.len() - (max - 3)..])
+        let tail: String = s.chars().skip(len - (max - 3)).collect();
+        format!("...{tail}")
     }
 }

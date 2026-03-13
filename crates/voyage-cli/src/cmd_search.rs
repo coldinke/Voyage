@@ -3,6 +3,12 @@ use std::path::Path;
 use voyage_embed::{Embedder, EmbeddingModel};
 use voyage_store::vectors::VectorStore;
 
+fn embedding_model_error(context: &str, err: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(format!(
+        "{context}: {err}. On first run, Voyage needs network access to download the embedding model, or an existing fastembed cache."
+    ))
+}
+
 pub fn run(data_dir: &Path, query: &str, limit: usize) -> Result<(), Box<dyn std::error::Error>> {
     let vectors_db = data_dir.join("vectors.db");
     if !vectors_db.exists() {
@@ -18,9 +24,12 @@ pub fn run(data_dir: &Path, query: &str, limit: usize) -> Result<(), Box<dyn std
     }
 
     println!("Loading embedding model...");
-    let embedder = Embedder::new(EmbeddingModel::AllMiniLmL6V2)?;
+    let embedder = Embedder::new(EmbeddingModel::AllMiniLmL6V2)
+        .map_err(|e| embedding_model_error("Failed to load embedding model", e))?;
 
-    let query_vec = embedder.embed_single(query)?;
+    let query_vec = embedder
+        .embed_single(query)
+        .map_err(|e| embedding_model_error("Failed to embed search query", e))?;
     let results = store.search(&query_vec, limit)?;
 
     if results.is_empty() {

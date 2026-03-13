@@ -70,6 +70,22 @@ fn apply(
     Ok(())
 }
 
+fn apply_with_context(
+    store: &mut SqliteStore,
+    session: &Session,
+    messages: &[Message],
+    path: &Path,
+    counters: &mut (u32, u32, u32),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let upsert = classify(store, session)?;
+    let fname = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    apply(store, session, messages, &fname, &upsert, counters)
+}
+
 pub fn run(
     db_path: &Path,
     source: Option<PathBuf>,
@@ -183,13 +199,14 @@ fn ingest_claude_code(
         match parser.parse_session(path) {
             Ok((mut session, messages)) => {
                 compute_summary(&mut session, &messages);
-                let upsert = classify(store, &session)?;
-                let fname = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
+                if let Err(e) = apply_with_context(store, &session, &messages, path, &mut counters)
+                {
+                    eprintln!(
+                        "  Error: {}: {e}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    errors += 1;
+                }
             }
             Err(e) => {
                 eprintln!(
@@ -229,13 +246,14 @@ fn ingest_opencode(
         match parser.parse_session(path, storage_root) {
             Ok((mut session, messages)) => {
                 compute_summary(&mut session, &messages);
-                let upsert = classify(store, &session)?;
-                let fname = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
+                if let Err(e) = apply_with_context(store, &session, &messages, path, &mut counters)
+                {
+                    eprintln!(
+                        "  Error: {}: {e}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    errors += 1;
+                }
             }
             Err(e) => {
                 eprintln!(
@@ -275,13 +293,14 @@ fn ingest_codex(
         match parser.parse_session(path) {
             Ok((mut session, messages)) => {
                 compute_summary(&mut session, &messages);
-                let upsert = classify(store, &session)?;
-                let fname = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
+                if let Err(e) = apply_with_context(store, &session, &messages, path, &mut counters)
+                {
+                    eprintln!(
+                        "  Error: {}: {e}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    errors += 1;
+                }
             }
             Err(e) => {
                 eprintln!(
