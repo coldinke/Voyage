@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /Users/vinci/_bmad && du -sh */ | sort -rh)",
+      "Bash(git add:*)",
+      "Bash(cargo run:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:ccusage.com)",
+      "Bash(just --list 2>&1)",
+      "Bash(git commit:*)",
+      "WebSearch",
+      "WebFetch(domain:developers.openai.com)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:betelgeuse.work)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:zread.ai)",
+      "Bash(python3 -c \"\nimport json, sys\nwith open\\(sys.argv[1]\\) as f:\n    for line in f:\n        obj = json.loads\\(line\\)\n        if obj['type'] == 'event_msg' and obj['payload'].get\\('type'\\) == 'token_count':\n            print\\(json.dumps\\(obj, indent=2\\)\\)\n            break\n\" ~/.codex/sessions/2026/02/27/rollout-2026-02-27T20-59-06-019c9f2e-7139-7373-89f4-84a04c366ed5.jsonl)",
+      "Bash(python3 -c \"\nimport json, sys\nwith open\\(sys.argv[1]\\) as f:\n    for line in f:\n        obj = json.loads\\(line\\)\n        if obj['type'] == 'event_msg' and obj['payload'].get\\('type'\\) == 'token_count':\n            info = obj['payload'].get\\('info'\\)\n            if info:\n                print\\(json.dumps\\(obj, indent=2\\)\\)\n                break\n\" ~/.codex/sessions/2026/02/27/rollout-2026-02-27T20-59-06-019c9f2e-7139-7373-89f4-84a04c366ed5.jsonl)",
+      "Bash(/Users/vinci/.cargo/bin/cargo test:*)",
+      "Bash(git remote:*)"
+    ]
+  }
+}

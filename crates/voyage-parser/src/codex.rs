@@ -98,10 +98,7 @@ impl CodexParser {
         Self
     }
 
-    pub fn parse_session(
-        &self,
-        path: &Path,
-    ) -> Result<(Session, Vec<Message>), ParseError> {
+    pub fn parse_session(&self, path: &Path) -> Result<(Session, Vec<Message>), ParseError> {
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
 
@@ -318,10 +315,15 @@ mod tests {
     #[test]
     fn parse_empty_session() {
         let dir = TempDir::new().unwrap();
-        let file = dir.path().join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000001.jsonl");
-        write_lines(&file, &[
-            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"00000000-0000-0000-0000-000000000001","cwd":"/tmp/test","model_provider":"openai"}}"#,
-        ]);
+        let file = dir
+            .path()
+            .join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000001.jsonl");
+        write_lines(
+            &file,
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"00000000-0000-0000-0000-000000000001","cwd":"/tmp/test","model_provider":"openai"}}"#,
+            ],
+        );
 
         let parser = CodexParser::new();
         let (session, messages) = parser.parse_session(&file).unwrap();
@@ -335,14 +337,19 @@ mod tests {
     #[test]
     fn parse_session_with_messages_and_tokens() {
         let dir = TempDir::new().unwrap();
-        let file = dir.path().join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000002.jsonl");
-        write_lines(&file, &[
-            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"00000000-0000-0000-0000-000000000002","timestamp":"2026-01-01T00:00:00Z","cwd":"/home/user/project","model_provider":"openai"}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{"turn_id":"turn1","model":"gpt-5.3-codex","cwd":"/home/user/project","effort":"medium"}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi there!"}]}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5000,"cached_input_tokens":2000,"output_tokens":300,"reasoning_output_tokens":50,"total_tokens":5300}},"rate_limits":null}}"#,
-        ]);
+        let file = dir
+            .path()
+            .join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000002.jsonl");
+        write_lines(
+            &file,
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"00000000-0000-0000-0000-000000000002","timestamp":"2026-01-01T00:00:00Z","cwd":"/home/user/project","model_provider":"openai"}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{"turn_id":"turn1","model":"gpt-5.3-codex","cwd":"/home/user/project","effort":"medium"}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi there!"}]}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5000,"cached_input_tokens":2000,"output_tokens":300,"reasoning_output_tokens":50,"total_tokens":5300}},"rate_limits":null}}"#,
+            ],
+        );
 
         let parser = CodexParser::new();
         let (session, messages) = parser.parse_session(&file).unwrap();
@@ -367,12 +374,17 @@ mod tests {
     #[test]
     fn skips_developer_messages() {
         let dir = TempDir::new().unwrap();
-        let file = dir.path().join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000003.jsonl");
-        write_lines(&file, &[
-            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"system prompt"}]}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#,
-        ]);
+        let file = dir
+            .path()
+            .join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000003.jsonl");
+        write_lines(
+            &file,
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:01Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"system prompt"}]}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#,
+            ],
+        );
 
         let parser = CodexParser::new();
         let (session, messages) = parser.parse_session(&file).unwrap();
@@ -385,12 +397,17 @@ mod tests {
     #[test]
     fn skips_reasoning_records() {
         let dir = TempDir::new().unwrap();
-        let file = dir.path().join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000004.jsonl");
-        write_lines(&file, &[
-            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"response_item","payload":{"type":"reasoning","summary":[],"content":null}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}"#,
-        ]);
+        let file = dir
+            .path()
+            .join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000004.jsonl");
+        write_lines(
+            &file,
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:01Z","type":"response_item","payload":{"type":"reasoning","summary":[],"content":null}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}"#,
+            ],
+        );
 
         let parser = CodexParser::new();
         let (_, messages) = parser.parse_session(&file).unwrap();
@@ -406,12 +423,18 @@ mod tests {
         std::fs::create_dir_all(&sessions_dir).unwrap();
 
         write_lines(
-            &sessions_dir.join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000001.jsonl"),
-            &[r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test"}}"#],
+            &sessions_dir
+                .join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000001.jsonl"),
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test"}}"#,
+            ],
         );
         write_lines(
-            &sessions_dir.join("rollout-2026-01-01T01-00-00-00000000-0000-0000-0000-000000000002.jsonl"),
-            &[r#"{"timestamp":"2026-01-01T01:00:00Z","type":"session_meta","payload":{"id":"test2"}}"#],
+            &sessions_dir
+                .join("rollout-2026-01-01T01-00-00-00000000-0000-0000-0000-000000000002.jsonl"),
+            &[
+                r#"{"timestamp":"2026-01-01T01:00:00Z","type":"session_meta","payload":{"id":"test2"}}"#,
+            ],
         );
 
         let parser = CodexParser::new();
@@ -421,24 +444,28 @@ mod tests {
 
     #[test]
     fn extract_uuid_from_rollout_filename() {
-        let path = Path::new("/home/.codex/sessions/2026/02/27/rollout-2026-02-27T20-59-06-019c9f2e-7139-7373-89f4-84a04c366ed5.jsonl");
-        let id = extract_uuid_from_filename(path);
-        assert_eq!(
-            id.to_string(),
-            "019c9f2e-7139-7373-89f4-84a04c366ed5"
+        let path = Path::new(
+            "/home/.codex/sessions/2026/02/27/rollout-2026-02-27T20-59-06-019c9f2e-7139-7373-89f4-84a04c366ed5.jsonl",
         );
+        let id = extract_uuid_from_filename(path);
+        assert_eq!(id.to_string(), "019c9f2e-7139-7373-89f4-84a04c366ed5");
     }
 
     #[test]
     fn uses_last_token_count() {
         let dir = TempDir::new().unwrap();
-        let file = dir.path().join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000005.jsonl");
-        write_lines(&file, &[
-            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50,"reasoning_output_tokens":0}},"rate_limits":null}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"more"}]}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":200,"output_tokens":150,"reasoning_output_tokens":30}},"rate_limits":null}}"#,
-        ]);
+        let file = dir
+            .path()
+            .join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000005.jsonl");
+        write_lines(
+            &file,
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50,"reasoning_output_tokens":0}},"rate_limits":null}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"more"}]}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":200,"output_tokens":150,"reasoning_output_tokens":30}},"rate_limits":null}}"#,
+            ],
+        );
 
         let parser = CodexParser::new();
         let (session, _) = parser.parse_session(&file).unwrap();
@@ -452,11 +479,16 @@ mod tests {
     #[test]
     fn token_count_with_null_info_skipped() {
         let dir = TempDir::new().unwrap();
-        let file = dir.path().join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000006.jsonl");
-        write_lines(&file, &[
-            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
-            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex"}}}"#,
-        ]);
+        let file = dir
+            .path()
+            .join("rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000006.jsonl");
+        write_lines(
+            &file,
+            &[
+                r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"test","cwd":"/tmp"}}"#,
+                r#"{"timestamp":"2026-01-01T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex"}}}"#,
+            ],
+        );
 
         let parser = CodexParser::new();
         let (session, _) = parser.parse_session(&file).unwrap();

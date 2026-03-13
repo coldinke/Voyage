@@ -98,7 +98,6 @@ fn default_data_dir() -> PathBuf {
         .join(".voyage")
 }
 
-
 fn main() {
     let cli = Cli::parse();
     let data_dir = cli.data_dir.unwrap_or_else(default_data_dir);

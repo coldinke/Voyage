@@ -40,7 +40,7 @@ pub fn run(
         entry.4 += s.turn_count;
     }
     let mut projects: Vec<_> = project_map.into_iter().collect();
-    projects.sort_by(|a, b| b.1 .2.partial_cmp(&a.1 .2).unwrap());
+    projects.sort_by(|a, b| b.1.2.partial_cmp(&a.1.2).unwrap());
 
     let total_tokens = overall.input_tokens
         + overall.output_tokens
@@ -61,31 +61,85 @@ pub fn run(
     };
 
     // Chart data serialization
-    let daily_labels: String = daily.iter().map(|d| format!("\"{}\"", &d.date[5..])).collect::<Vec<_>>().join(",");
-    let daily_costs: String = daily.iter().map(|d| format!("{:.4}", d.total_cost_usd)).collect::<Vec<_>>().join(",");
-    let daily_sessions: String = daily.iter().map(|d| d.session_count.to_string()).collect::<Vec<_>>().join(",");
-    let daily_input: String = daily.iter().map(|d| (d.input_tokens / 1000).to_string()).collect::<Vec<_>>().join(",");
-    let daily_output: String = daily.iter().map(|d| (d.output_tokens / 1000).to_string()).collect::<Vec<_>>().join(",");
-    let daily_turns: String = daily.iter().map(|d| d.turn_count.to_string()).collect::<Vec<_>>().join(",");
+    let daily_labels: String = daily
+        .iter()
+        .map(|d| format!("\"{}\"", &d.date[5..]))
+        .collect::<Vec<_>>()
+        .join(",");
+    let daily_costs: String = daily
+        .iter()
+        .map(|d| format!("{:.4}", d.total_cost_usd))
+        .collect::<Vec<_>>()
+        .join(",");
+    let daily_sessions: String = daily
+        .iter()
+        .map(|d| d.session_count.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let daily_input: String = daily
+        .iter()
+        .map(|d| (d.input_tokens / 1000).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let daily_output: String = daily
+        .iter()
+        .map(|d| (d.output_tokens / 1000).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let daily_turns: String = daily
+        .iter()
+        .map(|d| d.turn_count.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
 
-    let model_labels: String = by_model.iter().map(|m| format!("\"{}\"", m.model)).collect::<Vec<_>>().join(",");
-    let model_costs: String = by_model.iter().map(|m| format!("{:.4}", m.total_cost_usd)).collect::<Vec<_>>().join(",");
+    let model_labels: String = by_model
+        .iter()
+        .map(|m| format!("\"{}\"", m.model))
+        .collect::<Vec<_>>()
+        .join(",");
+    let model_costs: String = by_model
+        .iter()
+        .map(|m| format!("{:.4}", m.total_cost_usd))
+        .collect::<Vec<_>>()
+        .join(",");
 
-    let provider_labels: String = by_provider.iter().map(|p| format!("\"{}\"", p.provider)).collect::<Vec<_>>().join(",");
-    let provider_costs: String = by_provider.iter().map(|p| format!("{:.4}", p.total_cost_usd)).collect::<Vec<_>>().join(",");
+    let provider_labels: String = by_provider
+        .iter()
+        .map(|p| format!("\"{}\"", p.provider))
+        .collect::<Vec<_>>()
+        .join(",");
+    let provider_costs: String = by_provider
+        .iter()
+        .map(|p| format!("{:.4}", p.total_cost_usd))
+        .collect::<Vec<_>>()
+        .join(",");
 
     let top_projects = &projects[..projects.len().min(10)];
-    let proj_labels: String = top_projects.iter().map(|(name, _)| {
-        let short = if name.len() > 35 { format!("...{}", &name[name.len() - 32..]) } else { name.clone() };
-        format!("\"{short}\"")
-    }).collect::<Vec<_>>().join(",");
-    let proj_costs: String = top_projects.iter().map(|(_, s)| format!("{:.4}", s.2)).collect::<Vec<_>>().join(",");
+    let proj_labels: String = top_projects
+        .iter()
+        .map(|(name, _)| {
+            let short = if name.len() > 35 {
+                format!("...{}", &name[name.len() - 32..])
+            } else {
+                name.clone()
+            };
+            format!("\"{short}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let proj_costs: String = top_projects
+        .iter()
+        .map(|(_, s)| format!("{:.4}", s.2))
+        .collect::<Vec<_>>()
+        .join(",");
 
     let token_breakdown_labels = r#""Input","Output","Cache Read","Cache Write""#;
     let token_breakdown_data = format!(
         "{},{},{},{}",
-        overall.input_tokens, overall.output_tokens,
-        overall.cache_read_tokens, overall.cache_creation_tokens
+        overall.input_tokens,
+        overall.output_tokens,
+        overall.cache_read_tokens,
+        overall.cache_creation_tokens
     );
 
     // Session table rows
@@ -541,14 +595,22 @@ refreshCharts();
         provider_count = by_provider.len(),
         project_count = projects.len(),
         cost = overall.total_cost_usd,
-        cost_per_day = if days > 0 { format!("${:.2}", overall.total_cost_usd / days as f64) } else { "$0".into() },
+        cost_per_day = if days > 0 {
+            format!("${:.2}", overall.total_cost_usd / days as f64)
+        } else {
+            "$0".into()
+        },
         total_tokens_fmt = format_tokens(total_tokens),
         input_fmt = format_tokens(overall.input_tokens),
         output_fmt = format_tokens(overall.output_tokens),
         session_count = overall.session_count,
         total_turns = sessions.iter().map(|s| s.turn_count as u64).sum::<u64>(),
         avg_cost = avg_cost,
-        avg_tokens = format_tokens(if overall.session_count > 0 { total_tokens / overall.session_count } else { 0 }),
+        avg_tokens = format_tokens(if overall.session_count > 0 {
+            total_tokens / overall.session_count
+        } else {
+            0
+        }),
         cache_read_fmt = format_tokens(overall.cache_read_tokens),
         cache_write_fmt = format_tokens(overall.cache_creation_tokens),
         cache_hit_rate = cache_hit_rate,
@@ -572,13 +634,11 @@ refreshCharts();
         session_table = session_rows,
     );
 
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join("voyage-report.html")
-        });
+    let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("voyage-report.html")
+    });
 
     std::fs::write(&output_path, &html)?;
     println!("Report generated: {}", output_path.display());
@@ -590,7 +650,9 @@ refreshCharts();
         }
         #[cfg(target_os = "linux")]
         {
-            let _ = std::process::Command::new("xdg-open").arg(&output_path).spawn();
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&output_path)
+                .spawn();
         }
     }
 

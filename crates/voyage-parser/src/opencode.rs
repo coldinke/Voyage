@@ -114,10 +114,7 @@ impl OpenCodeParser {
             .and_then(|t| t.updated)
             .map(epoch_to_datetime);
 
-        let project = raw
-            .directory
-            .clone()
-            .unwrap_or_else(|| "unknown".into());
+        let project = raw.directory.clone().unwrap_or_else(|| "unknown".into());
 
         let mut session = Session::new(
             session_id,
@@ -171,12 +168,7 @@ impl OpenCodeParser {
         Ok((session, messages))
     }
 
-    fn convert_message(
-        &self,
-        raw: &RawMessage,
-        session_id: Uuid,
-        storage_root: &Path,
-    ) -> Message {
+    fn convert_message(&self, raw: &RawMessage, session_id: Uuid, storage_root: &Path) -> Message {
         let role = match raw.role.as_str() {
             "assistant" => Role::Assistant,
             "system" => Role::System,
@@ -188,14 +180,9 @@ impl OpenCodeParser {
             .as_ref()
             .map(|t| TokenUsage {
                 input_tokens: t.input.unwrap_or(0.0) as u64,
-                output_tokens: t.output.unwrap_or(0.0) as u64
-                    + t.reasoning.unwrap_or(0.0) as u64,
+                output_tokens: t.output.unwrap_or(0.0) as u64 + t.reasoning.unwrap_or(0.0) as u64,
                 cache_read_tokens: t.cache.as_ref().and_then(|c| c.read).unwrap_or(0.0) as u64,
-                cache_creation_tokens: t
-                    .cache
-                    .as_ref()
-                    .and_then(|c| c.write)
-                    .unwrap_or(0.0) as u64,
+                cache_creation_tokens: t.cache.as_ref().and_then(|c| c.write).unwrap_or(0.0) as u64,
             })
             .unwrap_or_default();
 
@@ -310,10 +297,7 @@ impl SessionParser for OpenCodeParser {
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, ParseError> {
     let content = std::fs::read_to_string(path)?;
-    serde_json::from_str(&content).map_err(|e| ParseError::Json {
-        line: 0,
-        source: e,
-    })
+    serde_json::from_str(&content).map_err(|e| ParseError::Json { line: 0, source: e })
 }
 
 fn epoch_to_datetime(epoch: f64) -> DateTime<Utc> {
@@ -470,18 +454,9 @@ mod tests {
 
         // Create multiple session files across projects
         std::fs::create_dir_all(storage.join("session/proj2")).unwrap();
-        write_json(
-            &storage.join("session/proj1/sess1.json"),
-            r#"{"id":"s1"}"#,
-        );
-        write_json(
-            &storage.join("session/proj1/sess2.json"),
-            r#"{"id":"s2"}"#,
-        );
-        write_json(
-            &storage.join("session/proj2/sess3.json"),
-            r#"{"id":"s3"}"#,
-        );
+        write_json(&storage.join("session/proj1/sess1.json"), r#"{"id":"s1"}"#);
+        write_json(&storage.join("session/proj1/sess2.json"), r#"{"id":"s2"}"#);
+        write_json(&storage.join("session/proj2/sess3.json"), r#"{"id":"s3"}"#);
 
         let parser = OpenCodeParser::new();
         let sessions = parser.discover_sessions(storage).unwrap();

@@ -110,11 +110,10 @@ impl ClaudeCodeParser {
                 continue;
             }
 
-            let record: RawRecord =
-                serde_json::from_str(&line).map_err(|e| ParseError::Json {
-                    line: line_num + 1,
-                    source: e,
-                })?;
+            let record: RawRecord = serde_json::from_str(&line).map_err(|e| ParseError::Json {
+                line: line_num + 1,
+                source: e,
+            })?;
 
             match record {
                 RawRecord::User {
@@ -160,12 +159,15 @@ impl ClaudeCodeParser {
                     timestamp,
                     ..
                 } => {
-                    let usage = raw_msg.usage.map(|u| TokenUsage {
-                        input_tokens: u.input_tokens.unwrap_or(0),
-                        output_tokens: u.output_tokens.unwrap_or(0),
-                        cache_read_tokens: u.cache_read_input_tokens.unwrap_or(0),
-                        cache_creation_tokens: u.cache_creation_input_tokens.unwrap_or(0),
-                    }).unwrap_or_default();
+                    let usage = raw_msg
+                        .usage
+                        .map(|u| TokenUsage {
+                            input_tokens: u.input_tokens.unwrap_or(0),
+                            output_tokens: u.output_tokens.unwrap_or(0),
+                            cache_read_tokens: u.cache_read_input_tokens.unwrap_or(0),
+                            cache_creation_tokens: u.cache_creation_input_tokens.unwrap_or(0),
+                        })
+                        .unwrap_or_default();
 
                     let content = raw_msg
                         .content
@@ -428,7 +430,8 @@ mod tests {
 
     #[test]
     fn extract_session_id_from_path() {
-        let path = PathBuf::from("/tmp/projects/-Users-test/9550f7c1-2907-414c-8527-eb992e7af55d.jsonl");
+        let path =
+            PathBuf::from("/tmp/projects/-Users-test/9550f7c1-2907-414c-8527-eb992e7af55d.jsonl");
         let id = extract_session_id(&path).unwrap();
         assert_eq!(id.to_string(), "9550f7c1-2907-414c-8527-eb992e7af55d");
     }
@@ -442,11 +445,9 @@ mod tests {
 
     #[test]
     fn parse_real_session_file() {
-        let real_path = PathBuf::from(
-            dirs_next::home_dir()
-                .unwrap()
-                .join(".claude/projects/-Users-vinci-lab-Voyage/9550f7c1-2907-414c-8527-eb992e7af55d.jsonl"),
-        );
+        let real_path = PathBuf::from(dirs_next::home_dir().unwrap().join(
+            ".claude/projects/-Users-vinci-lab-Voyage/9550f7c1-2907-414c-8527-eb992e7af55d.jsonl",
+        ));
         if !real_path.exists() {
             // Skip if not on the dev machine
             return;

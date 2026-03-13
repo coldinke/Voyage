@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use voyage_core::model::{extract_summary, Session, Message, Role};
+use voyage_core::model::{Message, Role, Session, extract_summary};
 use voyage_parser::claude_code::ClaudeCodeParser;
 use voyage_parser::codex::CodexParser;
 use voyage_parser::opencode::OpenCodeParser;
@@ -33,9 +33,7 @@ fn classify(store: &SqliteStore, session: &Session) -> Result<Upsert, Box<dyn st
     }
     match store.session_state(&session.id)? {
         None => Ok(Upsert::New),
-        Some(old_msgs) if session.message_count > old_msgs => {
-            Ok(Upsert::Updated { old_msgs })
-        }
+        Some(old_msgs) if session.message_count > old_msgs => Ok(Upsert::Updated { old_msgs }),
         Some(_) => Ok(Upsert::Unchanged),
     }
 }
@@ -93,7 +91,10 @@ pub fn run(
             ingest_codex(&mut store, &src)?;
         }
         Some(other) => {
-            return Err(format!("Unknown provider: {other}. Use 'claude-code', 'opencode', or 'codex'").into());
+            return Err(format!(
+                "Unknown provider: {other}. Use 'claude-code', 'opencode', or 'codex'"
+            )
+            .into());
         }
         None => {
             let claude_dir = default_claude_dir();
@@ -148,7 +149,14 @@ fn print_summary(label: &str, new: u32, updated: u32, skipped: u32, errors: u32)
     .filter(|(n, _)| *n > 0)
     .map(|(n, l)| format!("{n} {l}"))
     .collect();
-    println!("{label}: {}\n", if parts.is_empty() { "nothing to do".into() } else { parts.join(", ") });
+    println!(
+        "{label}: {}\n",
+        if parts.is_empty() {
+            "nothing to do".into()
+        } else {
+            parts.join(", ")
+        }
+    );
 }
 
 fn ingest_claude_code(
@@ -176,11 +184,18 @@ fn ingest_claude_code(
             Ok((mut session, messages)) => {
                 compute_summary(&mut session, &messages);
                 let upsert = classify(store, &session)?;
-                let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let fname = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
             }
             Err(e) => {
-                eprintln!("  Error: {}: {e}", path.file_name().unwrap_or_default().to_string_lossy());
+                eprintln!(
+                    "  Error: {}: {e}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                );
                 errors += 1;
             }
         }
@@ -215,11 +230,18 @@ fn ingest_opencode(
             Ok((mut session, messages)) => {
                 compute_summary(&mut session, &messages);
                 let upsert = classify(store, &session)?;
-                let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let fname = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
             }
             Err(e) => {
-                eprintln!("  Error: {}: {e}", path.file_name().unwrap_or_default().to_string_lossy());
+                eprintln!(
+                    "  Error: {}: {e}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                );
                 errors += 1;
             }
         }
@@ -254,11 +276,18 @@ fn ingest_codex(
             Ok((mut session, messages)) => {
                 compute_summary(&mut session, &messages);
                 let upsert = classify(store, &session)?;
-                let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let fname = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
             }
             Err(e) => {
-                eprintln!("  Error: {}: {e}", path.file_name().unwrap_or_default().to_string_lossy());
+                eprintln!(
+                    "  Error: {}: {e}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                );
                 errors += 1;
             }
         }

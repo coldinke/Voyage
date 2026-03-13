@@ -3,11 +3,7 @@ use std::path::Path;
 use voyage_embed::{Embedder, EmbeddingModel};
 use voyage_store::vectors::VectorStore;
 
-pub fn run(
-    data_dir: &Path,
-    query: &str,
-    limit: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(data_dir: &Path, query: &str, limit: usize) -> Result<(), Box<dyn std::error::Error>> {
     let vectors_db = data_dir.join("vectors.db");
     if !vectors_db.exists() {
         println!("No vector index yet. Run `voyage index` first.");
@@ -32,14 +28,8 @@ pub fn run(
         return Ok(());
     }
 
-    println!(
-        "\nSearch results for \"{}\" ({} indexed):\n",
-        query, count
-    );
-    println!(
-        "{:<6} {:<38} {}",
-        "Score", "Session", "Content"
-    );
+    println!("\nSearch results for \"{}\" ({} indexed):\n", query, count);
+    println!("{:<6} {:<38} {}", "Score", "Session", "Content");
     println!("{}", "-".repeat(100));
 
     for r in &results {

@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use uuid::Uuid;
 
 use crate::sqlite::StoreError;
@@ -134,10 +134,7 @@ pub struct SearchResult {
 }
 
 fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
-    embedding
-        .iter()
-        .flat_map(|f| f.to_le_bytes())
-        .collect()
+    embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
 fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {

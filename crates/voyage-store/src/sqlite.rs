@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use uuid::Uuid;
 
 use voyage_core::model::{Message, Provider, Role, Session, TokenUsage};
@@ -75,9 +75,9 @@ impl SqliteStore {
         )?;
 
         // Idempotent migration: add summary column
-        let _ = self.conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';"
-        );
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';");
 
         self.conn.execute_batch(
             "
@@ -101,9 +101,9 @@ impl SqliteStore {
 
     /// Returns (exists, message_count) for a session.
     pub fn session_state(&self, id: &Uuid) -> Result<Option<u32>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT message_count FROM sessions WHERE id = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT message_count FROM sessions WHERE id = ?1")?;
         let result = stmt.query_row(params![id.to_string()], |row| {
             Ok(row.get::<_, i64>(0)? as u32)
         });
@@ -153,7 +153,8 @@ impl SqliteStore {
     }
 
     pub fn insert_message(&self, msg: &Message) -> Result<(), StoreError> {
-        let tool_calls_json = serde_json::to_string(&msg.tool_calls).unwrap_or_else(|_| "[]".into());
+        let tool_calls_json =
+            serde_json::to_string(&msg.tool_calls).unwrap_or_else(|_| "[]".into());
         self.conn.execute(
             "INSERT OR REPLACE INTO messages
              (id, session_id, role, content, input_tokens, output_tokens,
@@ -243,9 +244,7 @@ impl SqliteStore {
              FROM sessions WHERE id = ?1",
         )?;
 
-        let result = stmt.query_row(params![id.to_string()], |row| {
-            Ok(row_to_session(row))
-        });
+        let result = stmt.query_row(params![id.to_string()], |row| Ok(row_to_session(row)));
 
         match result {
             Ok(session) => Ok(Some(session)),
@@ -283,7 +282,8 @@ impl SqliteStore {
         ));
         param_values.push(Box::new(limit as i64));
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let sessions = stmt
             .query_map(params_ref.as_slice(), |row| Ok(row_to_session(row)))?
@@ -317,7 +317,8 @@ impl SqliteStore {
             param_values.push(Box::new(project.to_string()));
         }
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let stats = self.conn.query_row(&sql, params_ref.as_slice(), |row| {
             Ok(UsageStats {
                 input_tokens: row.get::<_, i64>(0)? as u64,
@@ -352,7 +353,8 @@ impl SqliteStore {
 
         sql.push_str(" GROUP BY model ORDER BY SUM(estimated_cost_usd) DESC");
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let stats = stmt
             .query_map(params_ref.as_slice(), |row| {
@@ -390,7 +392,8 @@ impl SqliteStore {
 
         sql.push_str(" GROUP BY provider ORDER BY SUM(estimated_cost_usd) DESC");
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let stats = stmt
             .query_map(params_ref.as_slice(), |row| {
@@ -472,7 +475,8 @@ impl SqliteStore {
 
         sql.push_str(" GROUP BY day ORDER BY day ASC");
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let stats = stmt
             .query_map(params_ref.as_slice(), |row| {
@@ -720,9 +724,7 @@ mod tests {
         s2.project = "project-b".into();
         store.insert_session(&s2).unwrap();
 
-        let sessions = store
-            .list_sessions(None, Some("project-a"), 10)
-            .unwrap();
+        let sessions = store.list_sessions(None, Some("project-a"), 10).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].project, "project-a");
     }
