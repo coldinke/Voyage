@@ -51,7 +51,7 @@ impl std::ops::AddAssign for TokenUsage {
 }
 
 /// Cost per million tokens (input, output, cache_read, cache_write)
-fn cost_rates(model: &str) -> (f64, f64, f64, f64) {
+pub fn cost_rates(model: &str) -> (f64, f64, f64, f64) {
     match model {
         m if m.contains("opus") => (15.0, 75.0, 1.5, 18.75),
         m if m.contains("sonnet") => (3.0, 15.0, 0.3, 3.75),
