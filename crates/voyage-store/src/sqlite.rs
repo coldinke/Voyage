@@ -698,6 +698,184 @@ impl SqliteStore {
 
         Ok(stats)
     }
+
+    /// Get cache_read_tokens grouped by model (for computing cache savings).
+    pub fn get_cache_read_by_model(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<(String, u64)>, StoreError> {
+        let mut sql = String::from(
+            "SELECT model, COALESCE(SUM(cache_read_tokens), 0)
+             FROM sessions WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(since) = since {
+            sql.push_str(&format!(" AND started_at >= ?{}", param_values.len() + 1));
+            param_values.push(Box::new(since.to_rfc3339()));
+        }
+
+        sql.push_str(" GROUP BY model");
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows)
+    }
+
+    /// Get billing window stats for rate-limit awareness.
+    /// Buckets sessions into fixed windows of `window_hours` hours.
+    pub fn get_billing_window_stats(
+        &self,
+        window_hours: u32,
+    ) -> Result<Vec<BillingWindowStats>, StoreError> {
+        let window_secs = window_hours as i64 * 3600;
+        let sql = format!(
+            "SELECT
+                (CAST(strftime('%s', started_at) AS INTEGER) / {ws}) as bucket,
+                datetime((CAST(strftime('%s', started_at) AS INTEGER) / {ws}) * {ws}, 'unixepoch') as window_start,
+                datetime(((CAST(strftime('%s', started_at) AS INTEGER) / {ws}) + 1) * {ws}, 'unixepoch') as window_end,
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(estimated_cost_usd), 0.0),
+                COUNT(*)
+             FROM sessions
+             GROUP BY bucket
+             ORDER BY bucket DESC
+             LIMIT 10",
+            ws = window_secs
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let stats = stmt
+            .query_map([], |row| {
+                Ok(BillingWindowStats {
+                    window_start: row.get(1)?,
+                    window_end: row.get(2)?,
+                    input_tokens: row.get::<_, i64>(3)? as u64,
+                    output_tokens: row.get::<_, i64>(4)? as u64,
+                    cache_read_tokens: row.get::<_, i64>(5)? as u64,
+                    total_cost_usd: row.get(6)?,
+                    session_count: row.get::<_, i64>(7)? as u64,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(stats)
+    }
+
+    /// Find a session by ID prefix (at least 6 chars).
+    pub fn find_session_by_prefix(&self, prefix: &str) -> Result<Option<Session>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project, provider, model, started_at, ended_at, cwd, git_branch,
+                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                    estimated_cost_usd, message_count, turn_count, summary
+             FROM sessions WHERE id LIKE ?1 ORDER BY started_at DESC LIMIT 1",
+        )?;
+
+        let pattern = format!("{prefix}%");
+        let result = stmt.query_row(params![pattern], |row| Ok(row_to_session(row)));
+
+        match result {
+            Ok(session) => Ok(Some(session)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get message-level cost details for a session.
+    pub fn get_message_costs(
+        &self,
+        session_id: &Uuid,
+    ) -> Result<Vec<MessageCostRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, role, model, input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens, content
+             FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC",
+        )?;
+
+        let rows = stmt
+            .query_map(params![session_id.to_string()], |row| {
+                let content: String = row.get(7)?;
+                let preview = if content.len() > 60 {
+                    let end = content
+                        .char_indices()
+                        .nth(57)
+                        .map(|(i, _)| i)
+                        .unwrap_or(content.len().min(57));
+                    format!("{}...", &content[..end])
+                } else {
+                    content
+                };
+                // Clean up newlines in preview
+                let preview = preview.replace('\n', " ");
+
+                let model_str: Option<String> = row.get(2)?;
+                let model = model_str.unwrap_or_default();
+
+                let input_tokens = row.get::<_, i64>(3)? as u64;
+                let output_tokens = row.get::<_, i64>(4)? as u64;
+                let cache_read = row.get::<_, i64>(5)? as u64;
+                let cache_creation = row.get::<_, i64>(6)? as u64;
+
+                let usage = TokenUsage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens: cache_read,
+                    cache_creation_tokens: cache_creation,
+                };
+                let estimated_cost = usage.estimated_cost_usd(&model);
+
+                let ts_str: String = row.get(0)?;
+                let role: String = row.get(1)?;
+
+                Ok(MessageCostRow {
+                    timestamp: ts_str,
+                    role,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens: cache_read,
+                    cache_creation_tokens: cache_creation,
+                    estimated_cost,
+                    content_preview: preview,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BillingWindowStats {
+    pub window_start: String,
+    pub window_end: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub total_cost_usd: f64,
+    pub session_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MessageCostRow {
+    pub timestamp: String,
+    pub role: String,
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub estimated_cost: f64,
+    pub content_preview: String,
 }
 
 #[derive(Debug, Clone)]
