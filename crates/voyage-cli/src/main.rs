@@ -61,7 +61,11 @@ enum Commands {
         open: bool,
     },
     /// Build vector index from ingested sessions
-    Index,
+    Index {
+        /// Delete all existing embeddings and re-embed with richer text
+        #[arg(long)]
+        reindex: bool,
+    },
     /// Semantic search across sessions
     Search {
         /// Search query
@@ -125,7 +129,7 @@ fn main() {
         Commands::Report { days, output, open } => {
             cmd_report::run(&db_path, days, output.as_deref(), open)
         }
-        Commands::Index => cmd_index::run(&data_dir),
+        Commands::Index { reindex } => cmd_index::run(&data_dir, reindex),
         Commands::Search { query, limit } => cmd_search::run(&data_dir, &query, limit),
     };
 

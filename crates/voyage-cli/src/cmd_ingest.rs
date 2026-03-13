@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use voyage_core::model::Session;
-use voyage_core::model::Message;
+use voyage_core::model::{extract_summary, Session, Message, Role};
 use voyage_parser::claude_code::ClaudeCodeParser;
 use voyage_parser::codex::CodexParser;
 use voyage_parser::opencode::OpenCodeParser;
@@ -14,6 +13,18 @@ enum Upsert {
     Updated { old_msgs: u32 },
     Unchanged,
     Empty,
+}
+
+/// Compute summary for a session if not already set (e.g. by OpenCode title).
+fn compute_summary(session: &mut Session, messages: &[Message]) {
+    if !session.summary.is_empty() {
+        return;
+    }
+    let first_user = messages
+        .iter()
+        .find(|m| m.role == Role::User)
+        .map(|m| m.content.as_str());
+    session.summary = extract_summary(None, first_user, &session.model, &session.project);
 }
 
 fn classify(store: &SqliteStore, session: &Session) -> Result<Upsert, Box<dyn std::error::Error>> {
@@ -162,7 +173,8 @@ fn ingest_claude_code(
 
     for path in &session_files {
         match parser.parse_session(path) {
-            Ok((session, messages)) => {
+            Ok((mut session, messages)) => {
+                compute_summary(&mut session, &messages);
                 let upsert = classify(store, &session)?;
                 let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
@@ -200,7 +212,8 @@ fn ingest_opencode(
 
     for path in &session_files {
         match parser.parse_session(path, storage_root) {
-            Ok((session, messages)) => {
+            Ok((mut session, messages)) => {
+                compute_summary(&mut session, &messages);
                 let upsert = classify(store, &session)?;
                 let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 apply(store, &session, &messages, &fname, &upsert, &mut counters)?;
@@ -238,7 +251,8 @@ fn ingest_codex(
 
     for path in &session_files {
         match parser.parse_session(path) {
-            Ok((session, messages)) => {
+            Ok((mut session, messages)) => {
+                compute_summary(&mut session, &messages);
                 let upsert = classify(store, &session)?;
                 let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 apply(store, &session, &messages, &fname, &upsert, &mut counters)?;

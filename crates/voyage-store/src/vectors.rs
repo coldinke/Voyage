@@ -111,6 +111,11 @@ impl VectorStore {
         Ok(results)
     }
 
+    pub fn delete_all(&self) -> Result<(), StoreError> {
+        self.conn.execute("DELETE FROM embeddings", [])?;
+        Ok(())
+    }
+
     pub fn count(&self) -> Result<u64, StoreError> {
         let count: i64 = self
             .conn

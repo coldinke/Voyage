@@ -71,7 +71,16 @@ impl SqliteStore {
             CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
             CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+            ",
+        )?;
 
+        // Idempotent migration: add summary column
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';"
+        );
+
+        self.conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS daily_stats (
                 date TEXT NOT NULL,
                 provider TEXT NOT NULL,
@@ -119,8 +128,8 @@ impl SqliteStore {
             "INSERT OR REPLACE INTO sessions
              (id, project, provider, model, started_at, ended_at, cwd, git_branch,
               input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-              estimated_cost_usd, message_count, turn_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              estimated_cost_usd, message_count, turn_count, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 session.id.to_string(),
                 session.project,
@@ -137,6 +146,7 @@ impl SqliteStore {
                 session.estimated_cost_usd,
                 session.message_count as i64,
                 session.turn_count as i64,
+                session.summary,
             ],
         )?;
         Ok(())
@@ -176,8 +186,8 @@ impl SqliteStore {
             "INSERT OR REPLACE INTO sessions
              (id, project, provider, model, started_at, ended_at, cwd, git_branch,
               input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-              estimated_cost_usd, message_count, turn_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              estimated_cost_usd, message_count, turn_count, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 session.id.to_string(),
                 session.project,
@@ -194,6 +204,7 @@ impl SqliteStore {
                 session.estimated_cost_usd,
                 session.message_count as i64,
                 session.turn_count as i64,
+                session.summary,
             ],
         )?;
 
@@ -228,7 +239,7 @@ impl SqliteStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, project, provider, model, started_at, ended_at, cwd, git_branch,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    estimated_cost_usd, message_count, turn_count
+                    estimated_cost_usd, message_count, turn_count, summary
              FROM sessions WHERE id = ?1",
         )?;
 
@@ -252,7 +263,7 @@ impl SqliteStore {
         let mut sql = String::from(
             "SELECT id, project, provider, model, started_at, ended_at, cwd, git_branch,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    estimated_cost_usd, message_count, turn_count
+                    estimated_cost_usd, message_count, turn_count, summary
              FROM sessions WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -396,6 +407,49 @@ impl SqliteStore {
         Ok(stats)
     }
 
+    pub fn get_messages_by_session(
+        &self,
+        session_id: &Uuid,
+        limit: usize,
+    ) -> Result<Vec<Message>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, content, input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens, model, tool_calls_json, timestamp
+             FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC LIMIT ?2",
+        )?;
+        let messages = stmt
+            .query_map(params![session_id.to_string(), limit as i64], |row| {
+                let id_str: String = row.get(0)?;
+                let sid_str: String = row.get(1)?;
+                let role_str: String = row.get(2)?;
+                let tool_calls_json: String = row.get(9)?;
+                let ts_str: String = row.get(10)?;
+                Ok(Message {
+                    id: Uuid::parse_str(&id_str).unwrap(),
+                    session_id: Uuid::parse_str(&sid_str).unwrap(),
+                    role: match role_str.as_str() {
+                        "assistant" => Role::Assistant,
+                        "system" => Role::System,
+                        _ => Role::User,
+                    },
+                    content: row.get(3)?,
+                    usage: TokenUsage {
+                        input_tokens: row.get::<_, i64>(4)? as u64,
+                        output_tokens: row.get::<_, i64>(5)? as u64,
+                        cache_read_tokens: row.get::<_, i64>(6)? as u64,
+                        cache_creation_tokens: row.get::<_, i64>(7)? as u64,
+                    },
+                    model: row.get(8)?,
+                    tool_calls: serde_json::from_str(&tool_calls_json).unwrap_or_default(),
+                    timestamp: DateTime::parse_from_rfc3339(&ts_str)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
     pub fn get_daily_stats(
         &self,
         since: Option<DateTime<Utc>>,
@@ -527,6 +581,7 @@ fn row_to_session(row: &rusqlite::Row) -> Session {
         estimated_cost_usd: row.get(12).unwrap(),
         message_count: row.get::<_, i64>(13).unwrap() as u32,
         turn_count: row.get::<_, i64>(14).unwrap() as u32,
+        summary: row.get::<_, String>(15).unwrap_or_default(),
     }
 }
 
@@ -557,6 +612,7 @@ mod tests {
             estimated_cost_usd: 0.8475,
             message_count: 10,
             turn_count: 5,
+            summary: "Test session summary".into(),
         }
     }
 

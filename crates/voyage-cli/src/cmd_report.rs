@@ -98,6 +98,13 @@ pub fn run(
             voyage_core::model::Provider::OpenCode => r#"<span class="badge badge-opencode">OpenCode</span>"#,
             voyage_core::model::Provider::Codex => r#"<span class="badge badge-codex">Codex</span>"#,
         };
+        let summary_short = if s.summary.len() > 60 {
+            format!("{}...", &s.summary[..57])
+        } else {
+            s.summary.clone()
+        };
+        let summary_escaped = html_escape(&s.summary);
+        let summary_short_escaped = html_escape(&summary_short);
         let model_short = if s.model.len() > 20 {
             format!("{}...", &s.model[..17])
         } else {
@@ -112,6 +119,7 @@ pub fn run(
               <td><code>{id}</code></td>
               <td>{provider}</td>
               <td title="{project_full}">{project}</td>
+              <td class="summary-cell" title="{summary_full}">{summary}</td>
               <td><code>{model}</code></td>
               <td>{date}</td>
               <td>{msgs}</td>
@@ -124,6 +132,8 @@ pub fn run(
             provider = provider_badge,
             project_full = s.project,
             project = project_short,
+            summary_full = summary_escaped,
+            summary = summary_short_escaped,
             model = model_short,
             date = s.started_at.format("%m-%d %H:%M"),
             msgs = s.message_count,
@@ -315,6 +325,9 @@ code {{
 .badge-opencode {{ background:var(--success-dim); color:var(--success); }}
 .badge-codex   {{ background:var(--warn-dim); color:var(--warn); }}
 
+/* ── Summary cell ─────────────────────────────────────────── */
+.summary-cell {{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:0.7rem; color:var(--text-2); }}
+
 /* ── Token composition bar ─────────────────────────────────── */
 .comp-bar {{ display:flex; height:6px; border-radius:3px; overflow:hidden; min-width:56px; background:var(--surface-2); }}
 .seg-in    {{ background:var(--accent); }}
@@ -378,7 +391,7 @@ code {{
   </div></div>
 
   <div class="tbl-wrap"><h3>Sessions ({session_count})</h3><div class="scroll">
-    <table><thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Model</th><th>Date</th><th>Msgs</th><th>Turns</th><th>Tokens</th><th>Mix</th><th>Cost</th></tr></thead>
+    <table><thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th>Msgs</th><th>Turns</th><th>Tokens</th><th>Mix</th><th>Cost</th></tr></thead>
     <tbody>{session_table}</tbody></table>
   </div></div>
 
@@ -592,6 +605,13 @@ fn format_tokens(n: u64) -> String {
     } else {
         n.to_string()
     }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn shorten_path(s: &str, max: usize) -> String {

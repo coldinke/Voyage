@@ -160,6 +160,14 @@ impl OpenCodeParser {
 
         session.estimated_cost_usd = session.usage.estimated_cost_usd(&session.model);
 
+        // Set summary from title if available
+        if let Some(ref title) = raw.title {
+            let title = title.trim();
+            if !title.is_empty() {
+                session.summary = title.to_string();
+            }
+        }
+
         Ok((session, messages))
     }
 

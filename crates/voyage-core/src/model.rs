@@ -101,6 +101,7 @@ pub struct Session {
     pub estimated_cost_usd: f64,
     pub message_count: u32,
     pub turn_count: u32,
+    pub summary: String,
 }
 
 impl Session {
@@ -118,6 +119,7 @@ impl Session {
             estimated_cost_usd: 0.0,
             message_count: 0,
             turn_count: 0,
+            summary: String::new(),
         }
     }
 
@@ -139,6 +141,65 @@ impl Session {
             _ => {}
         }
     }
+}
+
+/// Extract a human-readable summary for a session.
+///
+/// Priority: (1) explicit title if non-empty, (2) first user message truncated
+/// to ~120 chars at a word boundary, (3) fallback to "model on project".
+pub fn extract_summary(
+    title: Option<&str>,
+    first_user_message: Option<&str>,
+    model: &str,
+    project: &str,
+) -> String {
+    // 1. Explicit title (e.g. from OpenCode)
+    if let Some(t) = title {
+        let t = t.trim();
+        if !t.is_empty() {
+            return truncate_at_boundary(t, 120);
+        }
+    }
+    // 2. First user message content
+    if let Some(msg) = first_user_message {
+        let msg = msg.trim();
+        if !msg.is_empty() {
+            return truncate_at_boundary(msg, 120);
+        }
+    }
+    // 3. Fallback
+    if model.is_empty() {
+        return project.to_string();
+    }
+    format!("{model} on {project}")
+}
+
+/// Truncate a string to at most `max` chars, breaking at a word or sentence boundary.
+pub fn truncate_at_boundary(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    // Snap max to a char boundary (avoids panic on multi-byte UTF-8)
+    let mut max = max;
+    while !s.is_char_boundary(max) && max > 0 {
+        max -= 1;
+    }
+    // Find a good break point: sentence end (. ! ?) or last space
+    let region = &s[..max];
+    // Try sentence boundary first
+    if let Some(pos) = region.rfind(|c: char| c == '.' || c == '!' || c == '?') {
+        if pos > max / 3 {
+            return s[..=pos].to_string();
+        }
+    }
+    // Fall back to word boundary
+    if let Some(pos) = region.rfind(' ') {
+        if pos > max / 3 {
+            return format!("{}...", &s[..pos]);
+        }
+    }
+    // Hard truncate (max is already on a char boundary)
+    format!("{}...", &s[..max])
 }
 
 #[cfg(test)]
@@ -331,5 +392,76 @@ mod tests {
         assert_eq!(json, "\"assistant\"");
         let parsed: Role = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, Role::Assistant);
+    }
+
+    #[test]
+    fn extract_summary_prefers_title() {
+        let result = extract_summary(Some("My title"), Some("user msg"), "opus", "proj");
+        assert_eq!(result, "My title");
+    }
+
+    #[test]
+    fn extract_summary_uses_first_user_message() {
+        let result = extract_summary(None, Some("Help me fix this bug"), "opus", "proj");
+        assert_eq!(result, "Help me fix this bug");
+    }
+
+    #[test]
+    fn extract_summary_fallback() {
+        let result = extract_summary(None, None, "opus", "proj");
+        assert_eq!(result, "opus on proj");
+    }
+
+    #[test]
+    fn extract_summary_empty_title_falls_through() {
+        let result = extract_summary(Some("  "), Some("real msg"), "opus", "proj");
+        assert_eq!(result, "real msg");
+    }
+
+    #[test]
+    fn truncate_at_boundary_short() {
+        assert_eq!(truncate_at_boundary("hello", 120), "hello");
+    }
+
+    #[test]
+    fn truncate_at_boundary_sentence() {
+        let s = "First sentence. Second sentence that is much longer and goes on.";
+        let result = truncate_at_boundary(s, 40);
+        assert_eq!(result, "First sentence.");
+    }
+
+    #[test]
+    fn truncate_at_boundary_word() {
+        let s = "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20";
+        let result = truncate_at_boundary(s, 50);
+        assert!(result.len() <= 53); // 50 + "..."
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_at_boundary_multibyte_utf8() {
+        // CJK string where naive byte slicing would land inside a multi-byte char
+        let s = "这是一个测试字符串，用来验证多字节字符不会导致崩溃的情况";
+        // Each CJK char is 3 bytes; ， (fullwidth comma) is also 3 bytes.
+        // Slicing at any byte offset should never panic.
+        for max in 0..=s.len() + 5 {
+            let result = truncate_at_boundary(s, max);
+            assert!(result.len() <= max + 3, "result too long for max={max}");
+        }
+        // Specific case: max lands mid-character
+        let result = truncate_at_boundary(s, 10);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn session_new_has_empty_summary() {
+        let session = Session::new(
+            Uuid::new_v4(),
+            "test".into(),
+            Provider::ClaudeCode,
+            String::new(),
+            "/tmp".into(),
+        );
+        assert_eq!(session.summary, "");
     }
 }
