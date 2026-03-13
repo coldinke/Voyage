@@ -1,10 +1,11 @@
 use std::path::Path;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Utc};
 use voyage_store::sqlite::SqliteStore;
 
 pub fn run_list(
     db_path: &Path,
+    since: Option<DateTime<Utc>>,
     days: u32,
     limit: usize,
     project: Option<&str>,
@@ -15,11 +16,15 @@ pub fn run_list(
     }
 
     let store = SqliteStore::open(db_path)?;
-    let since = Utc::now() - Duration::days(days as i64);
-    let sessions = store.list_sessions(Some(since), project, limit)?;
+    let sessions = store.list_sessions(since, project, limit)?;
+    let period_label = if since.is_none() {
+        "all time".to_string()
+    } else {
+        format!("last {days} day(s)")
+    };
 
     if sessions.is_empty() {
-        println!("No sessions found for the last {days} day(s).");
+        println!("No sessions found for {period_label}.");
         return Ok(());
     }
 

@@ -7,6 +7,7 @@ mod cmd_stats;
 
 use std::path::PathBuf;
 
+use chrono::{Duration, Utc};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -36,6 +37,9 @@ enum Commands {
         /// Show stats for the last N days
         #[arg(long, default_value = "1")]
         days: u32,
+        /// Show all-time stats
+        #[arg(long, conflicts_with = "days")]
+        all: bool,
         /// Filter by project name
         #[arg(long)]
         project: Option<String>,
@@ -53,6 +57,9 @@ enum Commands {
         /// Report period in days
         #[arg(long, default_value = "30")]
         days: u32,
+        /// Show all-time report
+        #[arg(long, conflicts_with = "days")]
+        all: bool,
         /// Output file path (default: ./voyage-report.html)
         #[arg(long)]
         output: Option<PathBuf>,
@@ -83,6 +90,9 @@ enum SessionAction {
         /// Show sessions from the last N days
         #[arg(long, default_value = "7")]
         days: u32,
+        /// Show all-time sessions
+        #[arg(long, conflicts_with = "days")]
+        all: bool,
         /// Maximum number of sessions to show
         #[arg(long, default_value = "20")]
         limit: usize,
@@ -115,18 +125,44 @@ fn main() {
         }
         Commands::Stats {
             days,
+            all,
             project,
             by_model,
-        } => cmd_stats::run(&db_path, days, project.as_deref(), by_model),
+        } => {
+            let since = if all {
+                None
+            } else {
+                Some(Utc::now() - Duration::days(days as i64))
+            };
+            cmd_stats::run(&db_path, since, days, project.as_deref(), by_model)
+        }
         Commands::Session { action } => match action {
             SessionAction::List {
                 days,
+                all,
                 limit,
                 project,
-            } => cmd_session::run_list(&db_path, days, limit, project.as_deref()),
+            } => {
+                let since = if all {
+                    None
+                } else {
+                    Some(Utc::now() - Duration::days(days as i64))
+                };
+                cmd_session::run_list(&db_path, since, days, limit, project.as_deref())
+            }
         },
-        Commands::Report { days, output, open } => {
-            cmd_report::run(&db_path, days, output.as_deref(), open)
+        Commands::Report {
+            days,
+            all,
+            output,
+            open,
+        } => {
+            let since = if all {
+                None
+            } else {
+                Some(Utc::now() - Duration::days(days as i64))
+            };
+            cmd_report::run(&db_path, since, days, output.as_deref(), open)
         }
         Commands::Index { reindex } => cmd_index::run(&data_dir, reindex),
         Commands::Search { query, limit } => cmd_search::run(&data_dir, &query, limit),

@@ -1,10 +1,11 @@
 use std::path::Path;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Utc};
 use voyage_store::sqlite::SqliteStore;
 
 pub fn run(
     db_path: &Path,
+    since: Option<DateTime<Utc>>,
     days: u32,
     project: Option<&str>,
     by_model: bool,
@@ -15,15 +16,19 @@ pub fn run(
     }
 
     let store = SqliteStore::open(db_path)?;
-    let since = Utc::now() - Duration::days(days as i64);
+    let period_label = if since.is_none() {
+        "all time".to_string()
+    } else {
+        format!("last {days} day(s)")
+    };
 
     if by_model {
-        let stats = store.get_stats_by_model(Some(since))?;
+        let stats = store.get_stats_by_model(since)?;
         if stats.is_empty() {
-            println!("No usage data for the last {days} day(s).");
+            println!("No usage data for {period_label}.");
             return Ok(());
         }
-        println!("Token usage by model (last {days} day(s)):\n");
+        println!("Token usage by model ({period_label}):\n");
         println!(
             "{:<25} {:>12} {:>12} {:>10} {:>8}",
             "Model", "Input", "Output", "Cost", "Sessions"
@@ -40,9 +45,9 @@ pub fn run(
             );
         }
     } else {
-        let stats = store.get_stats(Some(since), project)?;
+        let stats = store.get_stats(since, project)?;
         if stats.session_count == 0 {
-            println!("No usage data for the last {days} day(s).");
+            println!("No usage data for {period_label}.");
             return Ok(());
         }
         let total_tokens = stats.input_tokens
@@ -50,7 +55,7 @@ pub fn run(
             + stats.cache_read_tokens
             + stats.cache_creation_tokens;
 
-        println!("Token usage (last {days} day(s)):\n");
+        println!("Token usage ({period_label}):\n");
         if let Some(p) = project {
             println!("  Project:          {p}");
         }

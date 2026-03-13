@@ -2962,6 +2962,8 @@ dependencies = [
  "chrono",
  "clap",
  "dirs-next",
+ "rusqlite",
+ "tempfile",
  "uuid",
  "voyage-core",
  "voyage-embed",
@@ -2994,6 +2996,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs-next",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

@@ -132,20 +132,61 @@ impl Session {
     }
 }
 
+/// Merge a secondary session's messages into a primary session.
+///
+/// Messages are appended and sorted by timestamp, then session stats are
+/// recalculated from scratch so counts and usage totals remain consistent.
+pub fn merge_parsed_sessions(
+    primary: &mut Session,
+    primary_msgs: &mut Vec<Message>,
+    secondary_msgs: Vec<Message>,
+) {
+    // Reassign session_id on secondary messages to the primary session
+    let primary_id = primary.id;
+    primary_msgs.extend(secondary_msgs.into_iter().map(|mut m| {
+        m.session_id = primary_id;
+        m
+    }));
+    primary_msgs.sort_by_key(|m| m.timestamp);
+
+    // Recalculate session stats from scratch
+    primary.usage = TokenUsage::default();
+    primary.estimated_cost_usd = 0.0;
+    primary.message_count = 0;
+    primary.turn_count = 0;
+    primary.ended_at = None;
+    // Keep model — re-derive from first message that has one
+    let orig_model = std::mem::take(&mut primary.model);
+    for msg in primary_msgs.iter() {
+        primary.add_message(msg);
+    }
+    // If no message set the model, restore the original
+    if primary.model.is_empty() {
+        primary.model = orig_model;
+    }
+}
+
+/// Returns true if the title looks like a Claude Code auto-generated generic title
+/// (e.g. "New session - 2026-01-22T01:53:39.024Z").
+fn is_generic_title(t: &str) -> bool {
+    t.starts_with("New session - ")
+}
+
 /// Extract a human-readable summary for a session.
 ///
-/// Priority: (1) explicit title if non-empty, (2) first user message truncated
-/// to ~120 chars at a word boundary, (3) fallback to "model on project".
+/// Priority: (1) explicit title if non-empty and non-generic, (2) first user
+/// message truncated to ~120 chars at a word boundary, (3) fallback to
+/// "model on project".
 pub fn extract_summary(
     title: Option<&str>,
     first_user_message: Option<&str>,
     model: &str,
     project: &str,
 ) -> String {
-    // 1. Explicit title (e.g. from OpenCode)
+    // 1. Explicit title (e.g. from OpenCode) — skip generic auto-titles
     if let Some(t) = title {
         let t = t.trim();
-        if !t.is_empty() {
+        if !t.is_empty() && !is_generic_title(t) {
             return truncate_at_boundary(t, 120);
         }
     }
@@ -452,5 +493,109 @@ mod tests {
             "/tmp".into(),
         );
         assert_eq!(session.summary, "");
+    }
+
+    #[test]
+    fn extract_summary_generic_title_falls_through() {
+        let result = extract_summary(
+            Some("New session - 2026-01-22T01:53:39.024Z"),
+            Some("fix auth bug"),
+            "opus",
+            "proj",
+        );
+        assert_eq!(result, "fix auth bug");
+    }
+
+    #[test]
+    fn extract_summary_generic_title_no_user_message() {
+        let result = extract_summary(
+            Some("New session - 2026-01-22T01:53:39.024Z"),
+            None,
+            "opus",
+            "proj",
+        );
+        assert_eq!(result, "opus on proj");
+    }
+
+    #[test]
+    fn merge_parsed_sessions_combines_messages() {
+        let sid = Uuid::new_v4();
+        let mut session = Session::new(
+            sid,
+            "test".into(),
+            Provider::ClaudeCode,
+            String::new(),
+            "/tmp".into(),
+        );
+
+        let ts1: DateTime<Utc> = "2026-03-12T10:00:00Z".parse().unwrap();
+        let ts2: DateTime<Utc> = "2026-03-12T10:01:00Z".parse().unwrap();
+        let ts3: DateTime<Utc> = "2026-03-12T10:00:30Z".parse().unwrap();
+
+        let mut primary_msgs = vec![
+            Message {
+                id: Uuid::new_v4(),
+                session_id: sid,
+                role: Role::User,
+                content: "hello".into(),
+                usage: TokenUsage {
+                    input_tokens: 500,
+                    output_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                },
+                model: None,
+                tool_calls: vec![],
+                timestamp: ts1,
+            },
+            Message {
+                id: Uuid::new_v4(),
+                session_id: sid,
+                role: Role::Assistant,
+                content: "hi".into(),
+                usage: TokenUsage {
+                    input_tokens: 500,
+                    output_tokens: 200,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                },
+                model: Some("claude-opus-4-6".into()),
+                tool_calls: vec![],
+                timestamp: ts2,
+            },
+        ];
+
+        // Build initial stats
+        for msg in &primary_msgs {
+            session.add_message(msg);
+        }
+        session.summary = "original summary".into();
+
+        let secondary_msgs = vec![Message {
+            id: Uuid::new_v4(),
+            session_id: sid,
+            role: Role::Assistant,
+            content: "subagent response".into(),
+            usage: TokenUsage {
+                input_tokens: 300,
+                output_tokens: 100,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+            },
+            model: Some("claude-opus-4-6".into()),
+            tool_calls: vec![],
+            timestamp: ts3,
+        }];
+
+        merge_parsed_sessions(&mut session, &mut primary_msgs, secondary_msgs);
+
+        assert_eq!(session.message_count, 3);
+        assert_eq!(session.usage.input_tokens, 1300);
+        assert_eq!(session.usage.output_tokens, 300);
+        // Messages should be sorted by timestamp
+        assert!(primary_msgs[0].timestamp <= primary_msgs[1].timestamp);
+        assert!(primary_msgs[1].timestamp <= primary_msgs[2].timestamp);
+        // Summary should be preserved
+        assert_eq!(session.summary, "original summary");
     }
 }

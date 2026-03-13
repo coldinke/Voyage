@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Utc};
 use voyage_store::sqlite::SqliteStore;
 
 pub fn run(
     db_path: &Path,
+    since: Option<DateTime<Utc>>,
     days: u32,
     output: Option<&Path>,
     open_browser: bool,
@@ -15,16 +16,22 @@ pub fn run(
     }
 
     let store = SqliteStore::open(db_path)?;
-    let since = Utc::now() - Duration::days(days as i64);
 
-    let overall = store.get_stats(Some(since), None)?;
-    let by_model = store.get_stats_by_model(Some(since))?;
-    let by_provider = store.get_stats_by_provider(Some(since))?;
-    let daily = store.get_daily_stats(Some(since))?;
-    let sessions = store.list_sessions(Some(since), None, 100)?;
+    let overall = store.get_stats(since, None)?;
+    let by_model = store.get_stats_by_model(since)?;
+    let by_provider = store.get_stats_by_provider(since)?;
+    let daily = store.get_daily_stats(since)?;
+    let sessions = store.list_sessions(since, None, 100)?;
+    let tool_stats = store.get_tool_stats(since)?;
+
+    let period_label = if since.is_none() {
+        "all time".to_string()
+    } else {
+        format!("last {days} day(s)")
+    };
 
     if overall.session_count == 0 {
-        println!("No usage data for the last {days} day(s).");
+        println!("No usage data for {period_label}.");
         return Ok(());
     }
 
@@ -202,6 +209,100 @@ pub fn run(
         )
     }).collect::<Vec<_>>().join("\n");
 
+    // ── Tool usage aggregation ──────────────────────────────────
+    let total_tool_calls: u64 = tool_stats.iter().map(|t| t.count).sum();
+
+    fn tool_category(name: &str) -> &'static str {
+        match name {
+            "Read" | "Write" | "Edit" | "Glob" | "Grep" | "NotebookEdit" => "File Operations",
+            "Bash" | "Task" | "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" | "TaskStop"
+            | "TaskOutput" => "Execution & Tasks",
+            "Agent" | "Skill" | "ToolSearch" => "AI & Agents",
+            "WebFetch" | "WebSearch" => "Web",
+            _ => "Other",
+        }
+    }
+
+    // Category aggregation
+    let mut category_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    for t in &tool_stats {
+        *category_map.entry(tool_category(&t.tool)).or_default() += t.count;
+    }
+    let mut categories: Vec<_> = category_map.into_iter().collect();
+    categories.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let cat_labels: String = categories
+        .iter()
+        .map(|(name, _)| format!("\"{name}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let cat_data: String = categories
+        .iter()
+        .map(|(_, count)| count.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // Top tools chart (max 12)
+    let top_tools = &tool_stats[..tool_stats.len().min(12)];
+    let top_tool_labels: String = top_tools
+        .iter()
+        .map(|t| format!("\"{}\"", t.tool))
+        .collect::<Vec<_>>()
+        .join(",");
+    let top_tool_data: String = top_tools
+        .iter()
+        .map(|t| t.count.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // Tool table rows (grouped by category)
+    let mut tools_by_cat: std::collections::HashMap<&str, Vec<(&str, u64)>> =
+        std::collections::HashMap::new();
+    for t in &tool_stats {
+        tools_by_cat
+            .entry(tool_category(&t.tool))
+            .or_default()
+            .push((&t.tool, t.count));
+    }
+    let tool_table_rows: String = {
+        let mut rows = Vec::new();
+        let mut sorted_cats: Vec<_> = tools_by_cat.into_iter().collect();
+        sorted_cats.sort_by(|a, b| {
+            let sum_a: u64 = a.1.iter().map(|x| x.1).sum();
+            let sum_b: u64 = b.1.iter().map(|x| x.1).sum();
+            sum_b.cmp(&sum_a)
+        });
+        for (cat, mut tools) in sorted_cats {
+            tools.sort_by(|a, b| b.1.cmp(&a.1));
+            let cat_total: u64 = tools.iter().map(|x| x.1).sum();
+            let pct = if total_tool_calls > 0 {
+                cat_total as f64 / total_tool_calls as f64 * 100.0
+            } else {
+                0.0
+            };
+            rows.push(format!(
+                r#"<tr class="cat-row"><td colspan="2"><strong>{cat}</strong></td><td class="num"><strong>{total}</strong></td><td class="num"><strong>{pct:.1}%</strong></td></tr>"#,
+                cat = cat,
+                total = format_tokens(cat_total),
+                pct = pct,
+            ));
+            for (tool, count) in &tools {
+                let tool_pct = if total_tool_calls > 0 {
+                    *count as f64 / total_tool_calls as f64 * 100.0
+                } else {
+                    0.0
+                };
+                rows.push(format!(
+                    r#"<tr><td></td><td><code>{tool}</code></td><td class="num">{count}</td><td class="num">{pct:.1}%</td></tr>"#,
+                    tool = tool,
+                    count = format_tokens(*count),
+                    pct = tool_pct,
+                ));
+            }
+        }
+        rows.join("\n")
+    };
+
     let html = format!(
         r##"<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -343,13 +444,14 @@ body {{
 .tbl-wrap {{ background:var(--surface-1); border:1px solid var(--border-sub); border-radius:8px; padding:16px; margin-bottom:14px; }}
 .tbl-wrap h3 {{ font-size:0.7rem; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }}
 .scroll {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; font-size:0.75rem; white-space:nowrap; }}
+table {{ width:100%; border-collapse:collapse; font-size:0.75rem; white-space:nowrap; table-layout:fixed; }}
 th {{
   text-align:left; padding:7px 10px; border-bottom:1px solid var(--border);
   font-size:0.62rem; font-weight:600; color:var(--text-3);
   text-transform:uppercase; letter-spacing:0.04em;
+  overflow:hidden; text-overflow:ellipsis;
 }}
-td {{ padding:6px 10px; border-bottom:1px solid var(--border-sub); }}
+td {{ padding:6px 10px; border-bottom:1px solid var(--border-sub); overflow:hidden; text-overflow:ellipsis; }}
 tr:hover td {{ background:var(--hover-bg); }}
 .num {{ text-align:right; font-variant-numeric:tabular-nums; font-family:'JetBrains Mono',monospace; }}
 .cost-val {{ color:var(--success); font-weight:500; font-family:'JetBrains Mono',monospace; }}
@@ -369,6 +471,10 @@ code {{
 
 /* ── Summary cell ─────────────────────────────────────────── */
 .summary-cell {{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:0.7rem; color:var(--text-2); }}
+
+/* ── Token composition bar ─────────────────────────────────── */
+/* ── Category row (tool table) ─────────────────────────────── */
+.cat-row td {{ background:var(--surface-2); }}
 
 /* ── Token composition bar ─────────────────────────────────── */
 .comp-bar {{ display:flex; height:6px; border-radius:3px; overflow:hidden; min-width:56px; background:var(--surface-2); }}
@@ -398,7 +504,7 @@ code {{
   <div class="hdr">
     <div class="hdr-left">
       <h1>Voyage</h1>
-      <span class="tag">{days}d</span>
+      <span class="tag">{period_tag}</span>
     </div>
     <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">Light</button>
   </div>
@@ -426,14 +532,23 @@ code {{
   <div class="grid">
     <div class="panel c3"><h3>Daily Token Volume (K)</h3><canvas id="cVolume" height="70"></canvas></div>
   </div>
+  <div class="grid">
+    <div class="panel"><h3>Tool Calls by Category</h3><canvas id="cToolCat"></canvas></div>
+    <div class="panel c2"><h3>Top Tools ({total_tool_calls} total calls)</h3><canvas id="cTopTools" height="90"></canvas></div>
+  </div>
+
+  <div class="tbl-wrap"><h3>Tool Usage</h3><div class="scroll">
+    <table><colgroup><col style="width:10%"><col style="width:50%"><col style="width:20%"><col style="width:20%"></colgroup><thead><tr><th></th><th>Tool</th><th class="num">Calls</th><th class="num">Share</th></tr></thead>
+    <tbody>{tool_table_rows}</tbody></table>
+  </div></div>
 
   <div class="tbl-wrap"><h3>Projects</h3><div class="scroll">
-    <table><thead><tr><th>Project</th><th>Sessions</th><th>Turns</th><th>Tokens</th><th>Cost</th><th>Avg/Sess</th></tr></thead>
+    <table><colgroup><col style="width:40%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup><thead><tr><th>Project</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Avg/Sess</th></tr></thead>
     <tbody>{project_detail_rows}</tbody></table>
   </div></div>
 
   <div class="tbl-wrap"><h3>Sessions ({session_count})</h3><div class="scroll">
-    <table><thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th>Msgs</th><th>Turns</th><th>Tokens</th><th>Mix</th><th>Cost</th></tr></thead>
+    <table><colgroup><col style="width:6%"><col style="width:7%"><col style="width:16%"><col style="width:22%"><col style="width:11%"><col style="width:8%"><col style="width:5%"><col style="width:5%"><col style="width:7%"><col style="width:5%"><col style="width:8%"></colgroup><thead><tr><th>ID</th><th>Provider</th><th>Project</th><th>Summary</th><th>Model</th><th>Date</th><th class="num">Msgs</th><th class="num">Turns</th><th class="num">Tokens</th><th>Mix</th><th class="num">Cost</th></tr></thead>
     <tbody>{session_table}</tbody></table>
   </div></div>
 
@@ -571,6 +686,30 @@ function refreshCharts() {{
       plugins:{{ legend:{{ labels:{{ usePointStyle:true, pointStyle:'circle', padding:10 }} }} }}
     }}
   }}));
+
+  // Tool calls by category (doughnut)
+  charts.push(new Chart(document.getElementById('cToolCat'), {{
+    type:'doughnut',
+    data:{{
+      labels:[{cat_labels}],
+      datasets:[{{ data:[{cat_data}], backgroundColor:[p.accent,p.success,p.warn,p.error,p.muted,p.teal], borderWidth:0 }}]
+    }},
+    options:donut
+  }}));
+
+  // Top tools (horizontal bar)
+  charts.push(new Chart(document.getElementById('cTopTools'), {{
+    type:'bar',
+    data:{{
+      labels:[{top_tool_labels}],
+      datasets:[{{ label:'Calls', data:[{top_tool_data}], backgroundColor:p.accent+'bb', borderRadius:3 }}]
+    }},
+    options:{{
+      indexAxis:'y',
+      plugins:{{ legend:{{ display:false }} }},
+      scales:{{ x:{{ grid:{{ color:p.grid }} }}, y:{{ grid:{{ display:false }} }} }}
+    }}
+  }}));
 }}
 
 // Initial render
@@ -578,7 +717,11 @@ refreshCharts();
 </script>
 </body>
 </html>"##,
-        days = days,
+        period_tag = if since.is_none() {
+            "all".to_string()
+        } else {
+            format!("{days}d")
+        },
         now = Utc::now().format("%Y-%m-%d %H:%M UTC"),
         provider_count = by_provider.len(),
         project_count = projects.len(),
@@ -620,6 +763,12 @@ refreshCharts();
         proj_costs = proj_costs,
         project_detail_rows = project_detail_rows,
         session_table = session_rows,
+        total_tool_calls = format_tokens(total_tool_calls),
+        tool_table_rows = tool_table_rows,
+        cat_labels = cat_labels,
+        cat_data = cat_data,
+        top_tool_labels = top_tool_labels,
+        top_tool_data = top_tool_data,
     );
 
     let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {

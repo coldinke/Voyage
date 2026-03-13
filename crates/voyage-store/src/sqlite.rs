@@ -99,7 +99,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Returns (exists, message_count) for a session.
+    /// Returns message_count for a session, or None if it doesn't exist.
     pub fn session_state(&self, id: &Uuid) -> Result<Option<u32>, StoreError> {
         let mut stmt = self
             .conn
@@ -112,6 +112,120 @@ impl SqliteStore {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StoreError::Sqlite(e)),
         }
+    }
+
+    /// Returns full session state (message_count + summary), or None if missing.
+    pub fn session_state_full(&self, id: &Uuid) -> Result<Option<SessionState>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT message_count, summary FROM sessions WHERE id = ?1")?;
+        let result = stmt.query_row(params![id.to_string()], |row| {
+            Ok(SessionState {
+                message_count: row.get::<_, i64>(0)? as u32,
+                summary: row.get::<_, String>(1).unwrap_or_default(),
+            })
+        });
+        match result {
+            Ok(state) => Ok(Some(state)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Sqlite(e)),
+        }
+    }
+
+    /// Delete all messages for a session (the session row itself is preserved).
+    pub fn delete_messages_for_session(&self, session_id: &Uuid) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM messages WHERE session_id = ?1",
+            params![session_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Replace a session and all its messages atomically.
+    /// Deletes existing messages, upserts the session, and inserts all new messages.
+    pub fn replace_session_with_messages(
+        &mut self,
+        session: &Session,
+        messages: &[Message],
+    ) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+
+        // Delete old messages
+        tx.execute(
+            "DELETE FROM messages WHERE session_id = ?1",
+            params![session.id.to_string()],
+        )?;
+
+        // Upsert session
+        tx.execute(
+            "INSERT INTO sessions
+             (id, project, provider, model, started_at, ended_at, cwd, git_branch,
+              input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+              estimated_cost_usd, message_count, turn_count, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             ON CONFLICT(id) DO UPDATE SET
+                 project = excluded.project,
+                 provider = excluded.provider,
+                 model = excluded.model,
+                 started_at = excluded.started_at,
+                 ended_at = excluded.ended_at,
+                 cwd = excluded.cwd,
+                 git_branch = excluded.git_branch,
+                 input_tokens = excluded.input_tokens,
+                 output_tokens = excluded.output_tokens,
+                 cache_read_tokens = excluded.cache_read_tokens,
+                 cache_creation_tokens = excluded.cache_creation_tokens,
+                 estimated_cost_usd = excluded.estimated_cost_usd,
+                 message_count = excluded.message_count,
+                 turn_count = excluded.turn_count,
+                 summary = excluded.summary",
+            params![
+                session.id.to_string(),
+                session.project,
+                provider_to_str(session.provider),
+                session.model,
+                session.started_at.to_rfc3339(),
+                session.ended_at.map(|t| t.to_rfc3339()),
+                session.cwd,
+                session.git_branch,
+                session.usage.input_tokens as i64,
+                session.usage.output_tokens as i64,
+                session.usage.cache_read_tokens as i64,
+                session.usage.cache_creation_tokens as i64,
+                session.estimated_cost_usd,
+                session.message_count as i64,
+                session.turn_count as i64,
+                session.summary,
+            ],
+        )?;
+
+        // Insert new messages
+        for msg in messages {
+            let tool_calls_json =
+                serde_json::to_string(&msg.tool_calls).unwrap_or_else(|_| "[]".into());
+            tx.execute(
+                "INSERT INTO messages
+                 (id, session_id, role, content, input_tokens, output_tokens,
+                  cache_read_tokens, cache_creation_tokens, model, tool_calls_json, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    msg.id.to_string(),
+                    msg.session_id.to_string(),
+                    role_to_str(msg.role),
+                    msg.content,
+                    msg.usage.input_tokens as i64,
+                    msg.usage.output_tokens as i64,
+                    msg.usage.cache_read_tokens as i64,
+                    msg.usage.cache_creation_tokens as i64,
+                    msg.model,
+                    tool_calls_json,
+                    msg.timestamp.to_rfc3339(),
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn session_exists(&self, id: &Uuid) -> Result<bool, StoreError> {
@@ -547,6 +661,49 @@ impl SqliteStore {
 
         Ok(stats)
     }
+
+    /// Aggregate tool usage counts from messages, optionally filtered by time.
+    pub fn get_tool_stats(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<ToolStats>, StoreError> {
+        let mut sql = String::from(
+            "SELECT j.value AS tool_name, COUNT(*) AS cnt
+             FROM messages m, json_each(m.tool_calls_json) AS j
+             WHERE j.value != ''",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(since) = since {
+            sql.push_str(&format!(
+                " AND m.session_id IN (SELECT id FROM sessions WHERE started_at >= ?{})",
+                param_values.len() + 1
+            ));
+            param_values.push(Box::new(since.to_rfc3339()));
+        }
+
+        sql.push_str(" GROUP BY j.value ORDER BY cnt DESC");
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let stats = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok(ToolStats {
+                    tool: row.get(0)?,
+                    count: row.get::<_, i64>(1)? as u64,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(stats)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionState {
+    pub message_count: u32,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone)]
@@ -585,6 +742,12 @@ pub struct DailyStats {
     pub total_cost_usd: f64,
     pub session_count: u64,
     pub turn_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolStats {
+    pub tool: String,
+    pub count: u64,
 }
 
 fn provider_to_str(p: Provider) -> &'static str {
@@ -893,5 +1056,79 @@ mod tests {
 
         let retrieved = store.get_session(&session.id).unwrap().unwrap();
         assert_eq!(retrieved.message_count, 15);
+    }
+
+    #[test]
+    fn session_state_full_existing() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut session = sample_session();
+        session.message_count = 5;
+        session.summary = "hello".into();
+        store.insert_session(&session).unwrap();
+
+        let state = store.session_state_full(&session.id).unwrap().unwrap();
+        assert_eq!(state.message_count, 5);
+        assert_eq!(state.summary, "hello");
+    }
+
+    #[test]
+    fn session_state_full_missing() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let state = store.session_state_full(&Uuid::new_v4()).unwrap();
+        assert!(state.is_none());
+    }
+
+    #[test]
+    fn delete_messages_for_session() {
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let session = sample_session();
+        let msgs = vec![
+            sample_message(session.id),
+            sample_message(session.id),
+            sample_message(session.id),
+        ];
+        store.insert_session_with_messages(&session, &msgs).unwrap();
+
+        // Verify 3 messages exist
+        let before = store.get_messages_by_session(&session.id, 100).unwrap();
+        assert_eq!(before.len(), 3);
+
+        // Delete messages
+        store.delete_messages_for_session(&session.id).unwrap();
+
+        // Verify 0 messages remain
+        let after = store.get_messages_by_session(&session.id, 100).unwrap();
+        assert_eq!(after.len(), 0);
+
+        // Session row still exists
+        assert!(store.session_exists(&session.id).unwrap());
+    }
+
+    #[test]
+    fn replace_session_with_messages() {
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let mut session = sample_session();
+        session.message_count = 3;
+
+        let msg_a = sample_message(session.id);
+        let msg_b = sample_message(session.id);
+        let msg_c = sample_message(session.id);
+        store
+            .insert_session_with_messages(&session, &[msg_a, msg_b, msg_c])
+            .unwrap();
+
+        // Replace with only 2 messages
+        session.message_count = 2;
+        let msg_d = sample_message(session.id);
+        let msg_e = sample_message(session.id);
+        store
+            .replace_session_with_messages(&session, &[msg_d, msg_e])
+            .unwrap();
+
+        let retrieved = store.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(retrieved.message_count, 2);
+
+        let msgs = store.get_messages_by_session(&session.id, 100).unwrap();
+        assert_eq!(msgs.len(), 2);
     }
 }
