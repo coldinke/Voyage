@@ -199,12 +199,12 @@ impl SqliteStore {
             ],
         )?;
 
-        // Insert new messages
+        // Insert new messages (OR REPLACE handles ID collisions from subagent merging)
         for msg in messages {
             let tool_calls_json =
                 serde_json::to_string(&msg.tool_calls).unwrap_or_else(|_| "[]".into());
             tx.execute(
-                "INSERT INTO messages
+                "INSERT OR REPLACE INTO messages
                  (id, session_id, role, content, input_tokens, output_tokens,
                   cache_read_tokens, cache_creation_tokens, model, tool_calls_json, timestamp)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",

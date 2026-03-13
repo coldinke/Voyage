@@ -276,9 +276,17 @@ impl SessionParser for ClaudeCodeParser {
                 let entry = entry?;
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "jsonl") {
-                    sessions.push(path);
+                    // Only collect .jsonl files whose stem is a valid UUID
+                    // (skip agent-*.jsonl files sitting directly in project dirs)
+                    let is_uuid = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|s| Uuid::parse_str(s).is_ok());
+                    if is_uuid {
+                        sessions.push(path);
+                    }
                 } else if path.is_dir() {
-                    // Check for subagents/ subdirectory
+                    // Check for subagents/ subdirectory under UUID-named dirs
                     let subagents_dir = path.join("subagents");
                     if subagents_dir.is_dir() {
                         for sub_entry in std::fs::read_dir(&subagents_dir)? {
@@ -534,11 +542,16 @@ mod tests {
         let project_dir = dir.path().join("-Users-test-myproject");
         std::fs::create_dir_all(&project_dir).unwrap();
 
-        // Create session files
-        std::fs::File::create(project_dir.join("aaaa-bbbb-cccc.jsonl")).unwrap();
-        std::fs::File::create(project_dir.join("dddd-eeee-ffff.jsonl")).unwrap();
+        let uuid1 = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let uuid2 = "d4e5f6a7-b8c9-0123-4567-890abcdef012";
+
+        // Create session files with UUID names
+        std::fs::File::create(project_dir.join(format!("{uuid1}.jsonl"))).unwrap();
+        std::fs::File::create(project_dir.join(format!("{uuid2}.jsonl"))).unwrap();
+        // Create non-UUID file (should be ignored)
+        std::fs::File::create(project_dir.join("agent-abc123.jsonl")).unwrap();
         // Create subdirectory (should be ignored)
-        std::fs::create_dir_all(project_dir.join("aaaa-bbbb-cccc")).unwrap();
+        std::fs::create_dir_all(project_dir.join(uuid1)).unwrap();
 
         let parser = ClaudeCodeParser::new();
         let sessions = parser.discover_sessions(dir.path()).unwrap();
