@@ -12,6 +12,7 @@ path = "src/main.rs"
 voyage-core = { path = "../voyage-core" }
 voyage-embed = { path = "../voyage-embed" }
 voyage-parser = { path = "../voyage-parser" }
+voyage-graph = { path = "../voyage-graph" }
 voyage-store = { path = "../voyage-store" }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }

@@ -4,11 +4,14 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use voyage_core::model::{Message, Role, Session, extract_summary, merge_parsed_sessions};
+use voyage_graph::store::GraphStore;
 use voyage_parser::claude_code::ClaudeCodeParser;
 use voyage_parser::codex::CodexParser;
 use voyage_parser::opencode::OpenCodeParser;
 use voyage_parser::traits::SessionParser;
 use voyage_store::sqlite::SqliteStore;
+
+use crate::cmd_graph;
 
 /// Outcome of comparing a parsed session against the store.
 enum Upsert {
@@ -48,6 +51,7 @@ fn classify(store: &SqliteStore, session: &Session) -> Result<Upsert, Box<dyn st
 
 fn apply(
     store: &mut SqliteStore,
+    graph: Option<&GraphStore>,
     session: &Session,
     messages: &[Message],
     filename: &str,
@@ -57,18 +61,38 @@ fn apply(
     match upsert {
         Upsert::New => {
             store.insert_session_with_messages(session, messages)?;
-            println!(
-                "  + {filename} ({} msgs, ${:.4})",
-                session.message_count, session.estimated_cost_usd,
-            );
+            if let Some(graph) = graph {
+                let entity_count =
+                    cmd_graph::extract_session_entities(graph, session, messages)
+                        .unwrap_or(0);
+                println!(
+                    "  + {filename} ({} msgs, ${:.4}, {entity_count} entities)",
+                    session.message_count, session.estimated_cost_usd,
+                );
+            } else {
+                println!(
+                    "  + {filename} ({} msgs, ${:.4})",
+                    session.message_count, session.estimated_cost_usd,
+                );
+            }
             counters.0 += 1;
         }
         Upsert::Updated => {
             store.replace_session_with_messages(session, messages)?;
-            println!(
-                "  ~ {filename} ({} msgs, ${:.4})",
-                session.message_count, session.estimated_cost_usd,
-            );
+            if let Some(graph) = graph {
+                let entity_count =
+                    cmd_graph::extract_session_entities(graph, session, messages)
+                        .unwrap_or(0);
+                println!(
+                    "  ~ {filename} ({} msgs, ${:.4}, {entity_count} entities)",
+                    session.message_count, session.estimated_cost_usd,
+                );
+            } else {
+                println!(
+                    "  ~ {filename} ({} msgs, ${:.4})",
+                    session.message_count, session.estimated_cost_usd,
+                );
+            }
             counters.1 += 1;
         }
         Upsert::Unchanged | Upsert::Empty => {
@@ -80,13 +104,14 @@ fn apply(
 
 fn apply_with_context(
     store: &mut SqliteStore,
+    graph: Option<&GraphStore>,
     session: &Session,
     messages: &[Message],
     label: &str,
     counters: &mut (u32, u32, u32),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let upsert = classify(store, session)?;
-    apply(store, session, messages, label, &upsert, counters)
+    apply(store, graph, session, messages, label, &upsert, counters)
 }
 
 pub fn run(
@@ -96,18 +121,22 @@ pub fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = SqliteStore::open(db_path)?;
 
+    // Open graph store alongside the main db
+    let graph_path = db_path.with_file_name("graph.db");
+    let graph = GraphStore::open(&graph_path)?;
+
     match provider {
         Some("claude-code" | "claude") => {
             let src = source.unwrap_or_else(default_claude_dir);
-            ingest_claude_code(&mut store, &src)?;
+            ingest_claude_code(&mut store, &graph, &src)?;
         }
         Some("opencode") => {
             let src = source.unwrap_or_else(default_opencode_dir);
-            ingest_opencode(&mut store, &src)?;
+            ingest_opencode(&mut store, &graph, &src)?;
         }
         Some("codex") => {
             let src = source.unwrap_or_else(default_codex_dir);
-            ingest_codex(&mut store, &src)?;
+            ingest_codex(&mut store, &graph, &src)?;
         }
         Some(other) => {
             return Err(format!(
@@ -118,7 +147,7 @@ pub fn run(
         None => {
             let claude_dir = default_claude_dir();
             if claude_dir.is_dir() {
-                ingest_claude_code(&mut store, &claude_dir)?;
+                ingest_claude_code(&mut store, &graph, &claude_dir)?;
             }
             let opencode_dir = default_opencode_dir();
             if opencode_dir.is_dir()
@@ -126,14 +155,17 @@ pub fn run(
                     .parent()
                     .is_some_and(|p| p.join("opencode.db").exists())
             {
-                ingest_opencode(&mut store, &opencode_dir)?;
+                ingest_opencode(&mut store, &graph, &opencode_dir)?;
             }
             let codex_dir = default_codex_dir();
             if codex_dir.is_dir() {
-                ingest_codex(&mut store, &codex_dir)?;
+                ingest_codex(&mut store, &graph, &codex_dir)?;
             }
         }
     }
+
+    // Refresh session counts after all ingestion
+    graph.refresh_session_counts()?;
 
     Ok(())
 }
@@ -202,6 +234,7 @@ fn print_summary(label: &str, new: u32, updated: u32, skipped: u32, errors: u32)
 
 fn ingest_claude_code(
     store: &mut SqliteStore,
+    graph: &GraphStore,
     source: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Claude Code ===");
@@ -251,7 +284,9 @@ fn ingest_claude_code(
     let mut counters = (0u32, 0u32, 0u32);
     for (sid, (session, messages)) in &session_map {
         let label = sid.to_string()[..8].to_string();
-        if let Err(e) = apply_with_context(store, session, messages, &label, &mut counters) {
+        if let Err(e) =
+            apply_with_context(store, Some(graph), session, messages, &label, &mut counters)
+        {
             eprintln!("  Error: {label}: {e}");
             errors += 1;
         }
@@ -263,6 +298,7 @@ fn ingest_claude_code(
 
 fn ingest_opencode(
     store: &mut SqliteStore,
+    graph: &GraphStore,
     opencode_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== OpenCode ===");
@@ -270,7 +306,7 @@ fn ingest_opencode(
     // Detect SQLite vs legacy JSON path
     let db_path = opencode_dir.join("opencode.db");
     if db_path.exists() {
-        return ingest_opencode_sqlite(store, &db_path);
+        return ingest_opencode_sqlite(store, graph, &db_path);
     }
 
     // Legacy JSON path: look for storage/ subdirectory
@@ -278,17 +314,18 @@ fn ingest_opencode(
     if !storage_root.is_dir() {
         // Also try if opencode_dir itself is the storage root (backward compat)
         if opencode_dir.join("session").is_dir() {
-            return ingest_opencode_json(store, opencode_dir);
+            return ingest_opencode_json(store, graph, opencode_dir);
         }
         println!("Source not found: {}", opencode_dir.display());
         return Ok(());
     }
 
-    ingest_opencode_json(store, &storage_root)
+    ingest_opencode_json(store, graph, &storage_root)
 }
 
 fn ingest_opencode_json(
     store: &mut SqliteStore,
+    graph: &GraphStore,
     storage_root: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let parser = OpenCodeParser::new();
@@ -311,7 +348,7 @@ fn ingest_opencode_json(
                     .to_string_lossy()
                     .to_string();
                 if let Err(e) =
-                    apply_with_context(store, &session, &messages, &label, &mut counters)
+                    apply_with_context(store, Some(graph), &session, &messages, &label, &mut counters)
                 {
                     eprintln!("  Error: {label}: {e}");
                     errors += 1;
@@ -333,6 +370,7 @@ fn ingest_opencode_json(
 
 fn ingest_opencode_sqlite(
     store: &mut SqliteStore,
+    graph: &GraphStore,
     db_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use rusqlite::Connection;
@@ -384,7 +422,7 @@ fn ingest_opencode_sqlite(
     let mut counters = (0u32, 0u32, 0u32);
     for (sid, (session, messages)) in &parsed {
         let label = if sid.len() > 8 { &sid[..8] } else { sid };
-        if let Err(e) = apply_with_context(store, session, messages, label, &mut counters) {
+        if let Err(e) = apply_with_context(store, Some(graph), session, messages, label, &mut counters) {
             eprintln!("  Error: {label}: {e}");
             errors += 1;
         }
@@ -396,6 +434,7 @@ fn ingest_opencode_sqlite(
 
 fn ingest_codex(
     store: &mut SqliteStore,
+    graph: &GraphStore,
     codex_home: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Codex ===");
@@ -424,7 +463,7 @@ fn ingest_codex(
                     .to_string_lossy()
                     .to_string();
                 if let Err(e) =
-                    apply_with_context(store, &session, &messages, &label, &mut counters)
+                    apply_with_context(store, Some(graph), &session, &messages, &label, &mut counters)
                 {
                     eprintln!("  Error: {label}: {e}");
                     errors += 1;
@@ -576,8 +615,9 @@ mod tests {
         let db_dir = TempDir::new().unwrap();
         let db_path = db_dir.path().join("test.db");
         let mut store = SqliteStore::open(&db_path).unwrap();
+        let graph = GraphStore::open_in_memory().unwrap();
 
-        ingest_claude_code(&mut store, source).unwrap();
+        ingest_claude_code(&mut store, &graph, source).unwrap();
 
         // Should have 1 session with 4 messages (2 from main + 2 from subagent)
         let sessions = store.list_sessions(None, None, 100).unwrap();
@@ -660,8 +700,9 @@ mod tests {
         let store_dir = TempDir::new().unwrap();
         let store_path = store_dir.path().join("voyage.db");
         let mut store = SqliteStore::open(&store_path).unwrap();
+        let graph = GraphStore::open_in_memory().unwrap();
 
-        ingest_opencode_sqlite(&mut store, &db_path).unwrap();
+        ingest_opencode_sqlite(&mut store, &graph, &db_path).unwrap();
 
         // Should have 1 merged session (child merged into parent)
         let sessions = store.list_sessions(None, None, 100).unwrap();

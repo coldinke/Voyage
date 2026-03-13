@@ -2967,6 +2967,7 @@ dependencies = [
  "uuid",
  "voyage-core",
  "voyage-embed",
+ "voyage-graph",
  "voyage-parser",
  "voyage-store",
 ]
@@ -2988,6 +2989,19 @@ dependencies = [
  "anyhow",
  "fastembed",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "voyage-graph"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "rusqlite",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
