@@ -4,10 +4,18 @@ use fastembed::{EmbeddingModel as FEModel, InitOptions, TextEmbedding};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EmbedError {
-    #[error("Embedding model error: {0}")]
+    #[error("Embedding model error: {}", format_anyhow_chain(.0))]
     Model(#[from] anyhow::Error),
     #[error("Empty input")]
     EmptyInput,
+}
+
+fn format_anyhow_chain(err: &anyhow::Error) -> String {
+    let mut msg = err.to_string();
+    for cause in err.chain().skip(1) {
+        msg.push_str(&format!("\n  caused by: {cause}"));
+    }
+    msg
 }
 
 #[derive(Debug, Clone, Copy)]

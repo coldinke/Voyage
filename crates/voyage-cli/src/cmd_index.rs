@@ -7,7 +7,7 @@ use voyage_store::vectors::VectorStore;
 
 fn embedding_model_error(context: &str, err: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(format!(
-        "{context}: {err}. On first run, Voyage needs network access to download the embedding model, or an existing fastembed cache."
+        "{context}: {err}\n\nHint: On first run, the embedding model (~90MB) is downloaded from Hugging Face.\nIf download fails, you can manually place model files in .fastembed_cache/ or set HF_ENDPOINT."
     ))
 }
 
