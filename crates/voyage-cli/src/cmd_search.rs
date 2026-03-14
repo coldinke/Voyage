@@ -42,8 +42,9 @@ pub fn run(data_dir: &Path, query: &str, limit: usize) -> Result<(), Box<dyn std
     println!("{}", "-".repeat(100));
 
     for r in &results {
-        let preview = if r.content_preview.len() > 60 {
-            format!("{}...", &r.content_preview[..57])
+        let preview = if r.content_preview.chars().count() > 60 {
+            let truncated: String = r.content_preview.chars().take(57).collect();
+            format!("{truncated}...")
         } else {
             r.content_preview.clone()
         };
