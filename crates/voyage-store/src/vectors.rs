@@ -43,6 +43,20 @@ impl VectorStore {
             CREATE INDEX IF NOT EXISTS idx_embeddings_session ON embeddings(session_id);
             ",
         )?;
+
+        // Idempotent migration: add model_name column
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE embeddings ADD COLUMN model_name TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2';",
+        );
+
+        // Idempotent migration: add project and started_at for filtered search
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE embeddings ADD COLUMN project TEXT NOT NULL DEFAULT '';");
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE embeddings ADD COLUMN started_at TEXT NOT NULL DEFAULT '';",
+        );
+
         Ok(())
     }
 
@@ -54,17 +68,44 @@ impl VectorStore {
         content_preview: &str,
         embedding: &[f32],
     ) -> Result<(), StoreError> {
+        self.insert_embedding_with_meta(
+            id,
+            session_id,
+            message_id,
+            content_preview,
+            embedding,
+            "all-MiniLM-L6-v2",
+            "",
+            "",
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_embedding_with_meta(
+        &self,
+        id: &Uuid,
+        session_id: &Uuid,
+        message_id: Option<&Uuid>,
+        content_preview: &str,
+        embedding: &[f32],
+        model_name: &str,
+        project: &str,
+        started_at: &str,
+    ) -> Result<(), StoreError> {
         let blob = embedding_to_blob(embedding);
         self.conn.execute(
-            "INSERT OR REPLACE INTO embeddings (id, session_id, message_id, content_preview, embedding, dimensions)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO embeddings (id, session_id, message_id, content_preview, embedding, dimensions, model_name, project, started_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 id.to_string(),
                 session_id.to_string(),
                 message_id.map(|m| m.to_string()),
-                truncate(content_preview, 200),
+                truncate(content_preview, 500),
                 blob,
                 embedding.len() as i64,
+                model_name,
+                project,
+                started_at,
             ],
         )?;
         Ok(())
@@ -111,6 +152,55 @@ impl VectorStore {
         Ok(results)
     }
 
+    /// Search with optional filters on project and since date.
+    pub fn search_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        project: Option<&str>,
+        since: Option<&str>,
+    ) -> Result<Vec<SearchResult>, StoreError> {
+        let mut sql = String::from(
+            "SELECT id, session_id, message_id, content_preview, embedding FROM embeddings WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(p) = project {
+            sql.push_str(&format!(" AND project = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(p.to_string()));
+        }
+        if let Some(s) = since {
+            sql.push_str(&format!(" AND started_at >= ?{}", param_values.len() + 1));
+            param_values.push(Box::new(s.to_string()));
+        }
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let mut results: Vec<SearchResult> = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                let blob: Vec<u8> = row.get(4)?;
+                let stored = blob_to_embedding(&blob);
+                let score = cosine_similarity(query_embedding, &stored);
+                Ok(SearchResult {
+                    id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
+                    session_id: Uuid::parse_str(&row.get::<_, String>(1)?).unwrap(),
+                    message_id: row
+                        .get::<_, Option<String>>(2)?
+                        .and_then(|s| Uuid::parse_str(&s).ok()),
+                    content_preview: row.get(3)?,
+                    score,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        results.truncate(limit);
+        Ok(results)
+    }
+
     pub fn delete_all(&self) -> Result<(), StoreError> {
         self.conn.execute("DELETE FROM embeddings", [])?;
         Ok(())
@@ -124,7 +214,7 @@ impl VectorStore {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchResult {
     pub id: Uuid,
     pub session_id: Uuid,

@@ -40,6 +40,13 @@ impl EmbeddingModel {
             Self::MultilingualE5Small => 384,
         }
     }
+
+    pub fn model_name(self) -> &'static str {
+        match self {
+            Self::AllMiniLmL6V2 => "all-MiniLM-L6-v2",
+            Self::MultilingualE5Small => "multilingual-e5-small",
+        }
+    }
 }
 
 pub struct Embedder {
@@ -175,6 +182,20 @@ mod tests {
         if let Some(embedder) = try_get_embedder() {
             let empty: &[&str] = &[];
             assert!(embedder.embed_batch(empty).is_err());
+        }
+    }
+
+    #[test]
+    fn with_cache_dir_uses_given_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("models");
+        match Embedder::with_cache_dir(EmbeddingModel::AllMiniLmL6V2, cache_path.clone()) {
+            Ok(_embedder) => {
+                assert!(cache_path.exists(), "cache dir should be created");
+            }
+            Err(e) => {
+                eprintln!("Skipping with_cache_dir test (model unavailable): {e}");
+            }
         }
     }
 

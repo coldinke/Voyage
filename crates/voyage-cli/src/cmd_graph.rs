@@ -416,6 +416,22 @@ pub fn run_communities(graph_path: &Path, limit: usize) -> Result<(), Box<dyn st
     Ok(())
 }
 
+/// `voyage graph cleanup` — remove invalid entities (stopwords, short names, noise).
+pub fn run_cleanup(graph_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let graph = GraphStore::open(graph_path)?;
+
+    let before = graph.entity_count()?;
+    let removed = graph.cleanup_invalid_entities()?;
+    let after = graph.entity_count()?;
+
+    println!("=== Graph Cleanup ===\n");
+    println!("  Entities before:  {before}");
+    println!("  Removed:          {removed}");
+    println!("  Entities after:   {after}");
+    println!();
+    Ok(())
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()

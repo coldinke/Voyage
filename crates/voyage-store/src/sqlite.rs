@@ -79,6 +79,19 @@ impl SqliteStore {
             .conn
             .execute_batch("ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';");
 
+        // Idempotent migration: add task_description column
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN task_description TEXT NOT NULL DEFAULT '';",
+        );
+
+        // Idempotent migration: add rating and tags columns
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE sessions ADD COLUMN rating INTEGER DEFAULT NULL;");
+        let _ = self
+            .conn
+            .execute_batch("ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT NULL;");
+
         self.conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS daily_stats (
@@ -96,6 +109,17 @@ impl SqliteStore {
             );
             ",
         )?;
+
+        // FTS5 table for keyword search
+        let _ = self.conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+                session_id UNINDEXED,
+                summary,
+                task_description,
+                tokenize='porter unicode61'
+            );",
+        );
+
         Ok(())
     }
 
@@ -848,6 +872,109 @@ impl SqliteStore {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(rows)
+    }
+
+    // ── FTS5 ──
+
+    /// Populate FTS5 table from existing sessions.
+    pub fn populate_fts(&self) -> Result<u32, StoreError> {
+        // Clear and rebuild
+        self.conn.execute("DELETE FROM sessions_fts", [])?;
+        let count: i64 = self.conn.execute(
+            "INSERT INTO sessions_fts (session_id, summary, task_description)
+             SELECT id, summary, COALESCE(task_description, '') FROM sessions",
+            [],
+        )? as i64;
+        Ok(count as u32)
+    }
+
+    /// Upsert a single session into the FTS table.
+    pub fn upsert_fts(
+        &self,
+        session_id: &Uuid,
+        summary: &str,
+        task_description: &str,
+    ) -> Result<(), StoreError> {
+        let sid = session_id.to_string();
+        // Delete old entry if exists
+        self.conn.execute(
+            "DELETE FROM sessions_fts WHERE session_id = ?1",
+            params![sid],
+        )?;
+        self.conn.execute(
+            "INSERT INTO sessions_fts (session_id, summary, task_description) VALUES (?1, ?2, ?3)",
+            params![sid, summary, task_description],
+        )?;
+        Ok(())
+    }
+
+    /// Search sessions using FTS5 BM25 ranking.
+    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<(Uuid, f64)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, rank FROM sessions_fts WHERE sessions_fts MATCH ?1
+             ORDER BY rank LIMIT ?2",
+        )?;
+        let results = stmt
+            .query_map(params![query, limit as i64], |row| {
+                let sid: String = row.get(0)?;
+                let rank: f64 = row.get(1)?;
+                Ok((sid, rank))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(sid, rank)| Uuid::parse_str(&sid).ok().map(|id| (id, rank)))
+            .collect();
+        Ok(results)
+    }
+
+    // ── Rating ──
+
+    /// Set a rating (1-5) for a session.
+    pub fn set_rating(&self, session_id: &Uuid, rating: u8) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE sessions SET rating = ?1 WHERE id = ?2",
+            params![rating as i64, session_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Get the rating for a session.
+    pub fn get_rating(&self, session_id: &Uuid) -> Result<Option<u8>, StoreError> {
+        let result = self.conn.query_row(
+            "SELECT rating FROM sessions WHERE id = ?1",
+            params![session_id.to_string()],
+            |row| row.get::<_, Option<i64>>(0),
+        );
+        match result {
+            Ok(Some(r)) => Ok(Some(r as u8)),
+            Ok(None) => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Set tags (JSON array) for a session.
+    pub fn set_tags(&self, session_id: &Uuid, tags: &[String]) -> Result<(), StoreError> {
+        let json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
+        self.conn.execute(
+            "UPDATE sessions SET tags = ?1 WHERE id = ?2",
+            params![json, session_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Get tags for a session.
+    pub fn get_tags(&self, session_id: &Uuid) -> Result<Vec<String>, StoreError> {
+        let result = self.conn.query_row(
+            "SELECT tags FROM sessions WHERE id = ?1",
+            params![session_id.to_string()],
+            |row| row.get::<_, Option<String>>(0),
+        );
+        match result {
+            Ok(Some(json)) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+            Ok(None) => Ok(vec![]),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(vec![]),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 

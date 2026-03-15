@@ -174,9 +174,8 @@ fn is_generic_title(t: &str) -> bool {
 
 /// Extract a human-readable summary for a session.
 ///
-/// Priority: (1) explicit title if non-empty and non-generic, (2) first user
-/// message truncated to ~120 chars at a word boundary, (3) fallback to
-/// "model on project".
+/// Priority: (1) explicit title if non-empty and non-generic, (2) cleaned-up
+/// first user message, (3) fallback to "model on project".
 pub fn extract_summary(
     title: Option<&str>,
     first_user_message: Option<&str>,
@@ -190,11 +189,11 @@ pub fn extract_summary(
             return truncate_at_boundary(t, 120);
         }
     }
-    // 2. First user message content
+    // 2. First user message content (cleaned up)
     if let Some(msg) = first_user_message {
-        let msg = msg.trim();
-        if !msg.is_empty() {
-            return truncate_at_boundary(msg, 120);
+        let cleaned = clean_user_message_for_summary(msg);
+        if !cleaned.is_empty() {
+            return truncate_at_boundary(&cleaned, 120);
         }
     }
     // 3. Fallback
@@ -202,6 +201,90 @@ pub fn extract_summary(
         return project.to_string();
     }
     format!("{model} on {project}")
+}
+
+/// Clean up a user message for use as a summary.
+/// Skips XML tags, extracts plan titles, and finds the meaningful content.
+fn clean_user_message_for_summary(msg: &str) -> String {
+    let msg = msg.trim();
+    if msg.is_empty() {
+        return String::new();
+    }
+
+    // If the message starts with "Implement the following plan:\n\n# Plan: XXX",
+    // extract the plan title
+    if let Some(rest) = msg.strip_prefix("Implement the following plan:") {
+        let rest = rest.trim();
+        if let Some(plan_line) = rest
+            .lines()
+            .find(|l| l.starts_with("# Plan:") || l.starts_with("# "))
+        {
+            let title = plan_line
+                .trim_start_matches('#')
+                .trim_start_matches(" Plan:")
+                .trim();
+            if !title.is_empty() {
+                return title.to_string();
+            }
+        }
+    }
+
+    // If it starts with an XML tag (e.g. <local-command-caveat>), skip XML content
+    if msg.starts_with('<') {
+        // Skip lines that are empty, XML tags, or XML tag content (between open/close tags)
+        let mut in_tag = false;
+        for line in msg.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                if !in_tag {
+                    continue;
+                }
+                continue;
+            }
+            if trimmed.starts_with('<') && !trimmed.starts_with("</") {
+                in_tag = true;
+                continue;
+            }
+            if trimmed.starts_with("</") {
+                in_tag = false;
+                continue;
+            }
+            if in_tag {
+                continue;
+            }
+            return trimmed.to_string();
+        }
+    }
+
+    // Take content up to first newline or sentence boundary for clean summaries
+    let first_line = msg.lines().next().unwrap_or(msg).trim();
+    first_line.to_string()
+}
+
+/// Extract a task description from all user messages for embedding/FTS.
+/// Returns up to 500 chars of meaningful task description text.
+pub fn extract_task_description(messages: &[Message]) -> String {
+    let mut parts = Vec::new();
+    let mut total_len = 0usize;
+
+    for msg in messages {
+        if msg.role != Role::User || msg.content.is_empty() {
+            continue;
+        }
+        let cleaned = clean_user_message_for_summary(&msg.content);
+        if cleaned.is_empty() {
+            continue;
+        }
+        let remaining = 500usize.saturating_sub(total_len);
+        if remaining == 0 {
+            break;
+        }
+        let truncated = truncate_at_boundary(&cleaned, remaining);
+        total_len += truncated.len();
+        parts.push(truncated);
+    }
+
+    parts.join(" | ")
 }
 
 /// Truncate a string to at most `max` chars, breaking at a word or sentence boundary.
@@ -504,6 +587,67 @@ mod tests {
             "proj",
         );
         assert_eq!(result, "fix auth bug");
+    }
+
+    #[test]
+    fn extract_summary_skips_xml_tags() {
+        let msg = "<local-command-caveat>\nSome tag content\n</local-command-caveat>\n\nFix the authentication bug";
+        let result = extract_summary(None, Some(msg), "opus", "proj");
+        assert_eq!(result, "Fix the authentication bug");
+    }
+
+    #[test]
+    fn extract_summary_extracts_plan_title() {
+        let msg = "Implement the following plan:\n\n# Plan: Voyage v0.4 — Knowledge Engine\n\n## Context\nLong description...";
+        let result = extract_summary(None, Some(msg), "opus", "proj");
+        assert_eq!(result, "Voyage v0.4 — Knowledge Engine");
+    }
+
+    #[test]
+    fn extract_summary_keeps_verb_starts() {
+        let result = extract_summary(None, Some("Fix the broken login flow"), "opus", "proj");
+        assert_eq!(result, "Fix the broken login flow");
+    }
+
+    #[test]
+    fn extract_task_description_combines_messages() {
+        let sid = Uuid::new_v4();
+        let messages = vec![
+            Message {
+                id: Uuid::new_v4(),
+                session_id: sid,
+                role: Role::User,
+                content: "Fix auth bug".into(),
+                usage: TokenUsage::default(),
+                model: None,
+                tool_calls: vec![],
+                timestamp: Utc::now(),
+            },
+            Message {
+                id: Uuid::new_v4(),
+                session_id: sid,
+                role: Role::Assistant,
+                content: "I'll help with that".into(),
+                usage: TokenUsage::default(),
+                model: None,
+                tool_calls: vec![],
+                timestamp: Utc::now(),
+            },
+            Message {
+                id: Uuid::new_v4(),
+                session_id: sid,
+                role: Role::User,
+                content: "Also update the tests".into(),
+                usage: TokenUsage::default(),
+                model: None,
+                tool_calls: vec![],
+                timestamp: Utc::now(),
+            },
+        ];
+        let desc = extract_task_description(&messages);
+        assert!(desc.contains("Fix auth bug"));
+        assert!(desc.contains("Also update the tests"));
+        assert!(!desc.contains("I'll help"));
     }
 
     #[test]

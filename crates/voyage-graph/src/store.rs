@@ -776,6 +776,44 @@ impl GraphStore {
         Ok(ids)
     }
 
+    /// Remove entities that fail validation, along with their mentions and edges.
+    /// Returns the number of entities removed.
+    pub fn cleanup_invalid_entities(&self) -> Result<u32, GraphError> {
+        use crate::extract::is_valid_entity_name;
+
+        let mut stmt = self.conn.prepare("SELECT id, name FROM entities")?;
+        let invalid_ids: Vec<String> = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let name: String = row.get(1)?;
+                Ok((id, name))
+            })?
+            .filter_map(|r| r.ok())
+            .filter(|(_, name)| !is_valid_entity_name(name))
+            .map(|(id, _)| id)
+            .collect();
+
+        let count = invalid_ids.len() as u32;
+        for id in &invalid_ids {
+            self.conn.execute(
+                "DELETE FROM entity_mentions WHERE entity_id = ?1",
+                params![id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM session_entities WHERE entity_id = ?1",
+                params![id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM edges WHERE source_id = ?1 OR target_id = ?1",
+                params![id],
+            )?;
+            self.conn
+                .execute("DELETE FROM entities WHERE id = ?1", params![id])?;
+        }
+
+        Ok(count)
+    }
+
     /// Clear all graph data (for re-extraction).
     pub fn clear_all(&self) -> Result<(), GraphError> {
         self.conn.execute_batch(
@@ -1086,6 +1124,34 @@ impl GraphStore {
         tx.commit()?;
 
         Ok(())
+    }
+
+    /// Get entities associated with a session, ordered by mention_count descending.
+    pub fn entities_for_session(
+        &self,
+        session_id: &Uuid,
+        limit: usize,
+    ) -> Result<Vec<(Entity, u32)>, GraphError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.kind, e.name, e.display_name, e.first_seen, e.last_seen,
+                    e.mention_count, e.session_count, COALESCE(e.pagerank, 0.0), e.community_id,
+                    se.mention_count
+             FROM session_entities se
+             JOIN entities e ON se.entity_id = e.id
+             WHERE se.session_id = ?1
+             ORDER BY se.mention_count DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id.to_string(), limit as u32], |row| {
+            let entity = Self::row_to_entity(row)?;
+            let session_mention_count: u32 = row.get(10)?;
+            Ok((entity, session_mention_count))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
     }
 
     /// List communities with their members, sorted by size descending.
@@ -1444,6 +1510,79 @@ mod tests {
         assert!(e2.community_id.is_some());
         // Connected entities should be in the same community
         assert_eq!(e1.community_id, e2.community_id);
+    }
+
+    #[test]
+    fn entities_for_session_empty() {
+        let store = GraphStore::open_in_memory().unwrap();
+        let sid = Uuid::new_v4();
+        let result = store.entities_for_session(&sid, 10).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn entities_for_session_returns_ordered() {
+        let store = GraphStore::open_in_memory().unwrap();
+        let sid = Uuid::new_v4();
+
+        let file = make_entity(EntityKind::File, "src/auth.rs");
+        let func = make_entity(EntityKind::Function, "validate_token");
+        let concept = make_entity(EntityKind::Concept, "authentication");
+
+        // Record different numbers of mentions per entity in same session
+        store
+            .record_mention(&file, &make_mention(&file, sid))
+            .unwrap();
+        store
+            .record_mention(&file, &make_mention(&file, sid))
+            .unwrap();
+        store
+            .record_mention(&file, &make_mention(&file, sid))
+            .unwrap(); // 3
+
+        store
+            .record_mention(&func, &make_mention(&func, sid))
+            .unwrap(); // 1
+
+        store
+            .record_mention(&concept, &make_mention(&concept, sid))
+            .unwrap();
+        store
+            .record_mention(&concept, &make_mention(&concept, sid))
+            .unwrap(); // 2
+
+        let result = store.entities_for_session(&sid, 10).unwrap();
+        assert_eq!(result.len(), 3);
+        // Ordered by session mention_count DESC: file(3), concept(2), func(1)
+        assert_eq!(result[0].0.name, "src/auth.rs");
+        assert_eq!(result[0].1, 3);
+        assert_eq!(result[1].0.name, "authentication");
+        assert_eq!(result[1].1, 2);
+        assert_eq!(result[2].0.name, "validate_token");
+        assert_eq!(result[2].1, 1);
+    }
+
+    #[test]
+    fn entities_for_session_respects_limit() {
+        let store = GraphStore::open_in_memory().unwrap();
+        let sid = Uuid::new_v4();
+
+        let file = make_entity(EntityKind::File, "src/auth.rs");
+        let func = make_entity(EntityKind::Function, "validate_token");
+        let concept = make_entity(EntityKind::Concept, "authentication");
+
+        store
+            .record_mention(&file, &make_mention(&file, sid))
+            .unwrap();
+        store
+            .record_mention(&func, &make_mention(&func, sid))
+            .unwrap();
+        store
+            .record_mention(&concept, &make_mention(&concept, sid))
+            .unwrap();
+
+        let result = store.entities_for_session(&sid, 2).unwrap();
+        assert_eq!(result.len(), 2);
     }
 
     #[test]

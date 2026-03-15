@@ -20,6 +20,38 @@ pub struct Extraction {
     pub entities: Vec<(Entity, EntityMention)>,
 }
 
+/// Stopwords that should never be entity names.
+const ENTITY_STOPWORDS: &[&str] = &[
+    "type", "self", "Self", "super", "crate", "the", "a", "an", "is", "was", "are", "in", "on",
+    "at", "to", "from", "with", "by", "of", "it", "or", "and", "not", "no", "for", "if", "do",
+    "has", "had", "your", "this", "that", "new", "let", "mut", "pub", "use", "mod", "ref",
+];
+
+/// Additional keywords filtered from function extraction.
+const FUNCTION_KEYWORDS: &[&str] = &[
+    "impl", "loop", "break", "return", "async", "await", "match", "from", "into", "try", "test",
+    "self", "Self", "true", "false", "None", "Some", "Ok", "Err", "where", "else", "while",
+    "continue", "move", "dyn", "enum", "struct", "trait", "const", "static", "type", "fn",
+];
+
+/// Check whether an entity name is valid (not noise).
+pub fn is_valid_entity_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    // Non-empty and at least 2 chars
+    if trimmed.len() < 2 {
+        return false;
+    }
+    // Not a stopword
+    if ENTITY_STOPWORDS.contains(&trimmed) {
+        return false;
+    }
+    // Must contain at least one letter
+    if !trimmed.chars().any(|c| c.is_alphabetic()) {
+        return false;
+    }
+    true
+}
+
 /// Software concepts whitelist for concept extraction (user messages only).
 const CONCEPTS: &[&str] = &[
     "authentication",
@@ -319,11 +351,10 @@ fn extract_functions(
         for cap in re.captures_iter(content) {
             let bare_name = cap.get(1).unwrap().as_str();
 
-            // Skip common noise: single-char names, all-caps constants, test helpers
-            if bare_name.len() <= 1
-                || bare_name == "self"
-                || bare_name == "Self"
-                || bare_name == "test"
+            // Skip noise: short names, stopwords, language keywords
+            if bare_name.len() < 3
+                || ENTITY_STOPWORDS.contains(&bare_name)
+                || FUNCTION_KEYWORDS.contains(&bare_name)
             {
                 continue;
             }
@@ -382,16 +413,14 @@ fn extract_dependencies(
 
             // For Rust `use`, extract the top-level crate name
             let name = if *is_rust_use {
-                // Skip `use crate::` and `use self::` and `use super::`
+                // Skip internal module references entirely — not external dependencies
                 if raw.starts_with("crate::")
                     || raw.starts_with("self::")
                     || raw.starts_with("super::")
                 {
-                    // Extract as module reference instead
-                    raw.split("::").take(2).collect::<Vec<_>>().join("::")
-                } else {
-                    raw.split("::").next().unwrap_or(raw).to_string()
+                    continue;
                 }
+                raw.split("::").next().unwrap_or(raw).to_string()
             } else {
                 // For Python, take top-level package
                 raw.split('.').next().unwrap_or(raw).to_string()
@@ -399,6 +428,11 @@ fn extract_dependencies(
 
             // Skip std/builtin
             if name == "std" || name == "core" || name == "alloc" || name == "os" || name == "sys" {
+                continue;
+            }
+
+            // Validate entity name
+            if !is_valid_entity_name(&name) {
                 continue;
             }
 
@@ -793,6 +827,104 @@ mod tests {
             .collect();
         assert!(!file_mentions.is_empty());
         assert_eq!(file_mentions[0].1.role, MentionRole::Reference);
+    }
+
+    #[test]
+    fn is_valid_entity_name_rejects_empty() {
+        assert!(!is_valid_entity_name(""));
+        assert!(!is_valid_entity_name(" "));
+        assert!(!is_valid_entity_name("a"));
+    }
+
+    #[test]
+    fn is_valid_entity_name_rejects_stopwords() {
+        assert!(!is_valid_entity_name("type"));
+        assert!(!is_valid_entity_name("self"));
+        assert!(!is_valid_entity_name("the"));
+        assert!(!is_valid_entity_name("pub"));
+    }
+
+    #[test]
+    fn is_valid_entity_name_rejects_pure_punctuation() {
+        assert!(!is_valid_entity_name("::"));
+        assert!(!is_valid_entity_name(".."));
+        assert!(!is_valid_entity_name("//"));
+    }
+
+    #[test]
+    fn is_valid_entity_name_accepts_valid_names() {
+        assert!(is_valid_entity_name("serde"));
+        assert!(is_valid_entity_name("tokio"));
+        assert!(is_valid_entity_name("src/auth.rs"));
+        assert!(is_valid_entity_name("validate_token"));
+    }
+
+    #[test]
+    fn extract_dependencies_skips_internal_modules() {
+        let ctx = test_ctx();
+        let content = "use super::foo;\nuse crate::bar;\nuse self::baz;\nuse serde::Deserialize;";
+        let result = extract_entities(content, &ctx);
+        let deps: Vec<_> = result
+            .entities
+            .iter()
+            .filter(|(e, _)| e.kind == EntityKind::Dependency)
+            .map(|(e, _)| e.name.as_str())
+            .collect();
+        // super/crate/self should be skipped entirely
+        assert!(!deps.iter().any(|d| d.contains("super")), "deps: {deps:?}");
+        assert!(!deps.iter().any(|d| d.contains("crate")), "deps: {deps:?}");
+        assert!(deps.contains(&"serde"), "deps: {deps:?}");
+    }
+
+    #[test]
+    fn extract_dependencies_skips_stopword_names() {
+        let ctx = test_ctx();
+        let content = "use of::something;";
+        let result = extract_entities(content, &ctx);
+        let deps: Vec<_> = result
+            .entities
+            .iter()
+            .filter(|(e, _)| e.kind == EntityKind::Dependency)
+            .map(|(e, _)| e.name.as_str())
+            .collect();
+        assert!(!deps.contains(&"of"), "deps: {deps:?}");
+    }
+
+    #[test]
+    fn extract_functions_skips_keywords() {
+        let ctx = test_ctx();
+        let content = "fn main() {}\nimpl Foo {}\nstruct Ok {}\nfn process_request() {}";
+        let result = extract_entities(content, &ctx);
+        let fns: Vec<_> = result
+            .entities
+            .iter()
+            .filter(|(e, _)| e.kind == EntityKind::Function)
+            .map(|(e, _)| e.display_name.as_str())
+            .collect();
+        // "impl" and "Ok" are keywords, should be filtered
+        assert!(!fns.contains(&"impl"), "fns: {fns:?}");
+        assert!(!fns.contains(&"Ok"), "fns: {fns:?}");
+        // But valid names should remain
+        assert!(fns.contains(&"main"), "fns: {fns:?}");
+        assert!(fns.contains(&"Foo"), "fns: {fns:?}");
+        assert!(fns.contains(&"process_request"), "fns: {fns:?}");
+    }
+
+    #[test]
+    fn extract_functions_skips_short_names() {
+        let mut ctx = test_ctx();
+        ctx.tool_calls = vec![];
+        let content = "fn ab() {}\nfn abc() {}";
+        let result = extract_entities(content, &ctx);
+        let fns: Vec<_> = result
+            .entities
+            .iter()
+            .filter(|(e, _)| e.kind == EntityKind::Function)
+            .map(|(e, _)| e.display_name.as_str())
+            .collect();
+        // "ab" is only 2 chars, should be filtered (min 3)
+        assert!(!fns.contains(&"ab"), "fns: {fns:?}");
+        assert!(fns.contains(&"abc"), "fns: {fns:?}");
     }
 
     #[test]

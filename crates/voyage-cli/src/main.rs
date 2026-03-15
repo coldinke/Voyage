@@ -1,15 +1,25 @@
+mod cmd_analytics;
 mod cmd_graph;
 mod cmd_index;
 mod cmd_ingest;
+mod cmd_rate;
 mod cmd_report;
 mod cmd_search;
 mod cmd_session;
 mod cmd_stats;
+mod cmd_suggest;
 
 use std::path::PathBuf;
 
 use chrono::{Duration, Utc};
 use clap::{Parser, Subcommand};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Human,
+    Machine,
+    Context,
+}
 
 #[derive(Parser)]
 #[command(name = "voyage", about = "LLM token analytics & knowledge platform")]
@@ -17,6 +27,10 @@ struct Cli {
     /// Path to the data directory (default: ~/.voyage)
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
+
+    /// Output machine-readable JSON instead of human-friendly text
+    #[arg(long, global = true)]
+    machine: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -82,6 +96,9 @@ enum Commands {
         /// Delete all existing embeddings and re-embed with richer text
         #[arg(long)]
         reindex: bool,
+        /// Embedding model: mini (AllMiniLmL6V2, default) or multi (MultilingualE5Small)
+        #[arg(long, default_value = "mini")]
+        model: String,
     },
     /// Semantic search across sessions
     Search {
@@ -90,6 +107,42 @@ enum Commands {
         /// Maximum number of results
         #[arg(long, default_value = "10")]
         limit: usize,
+        /// Filter by project name
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter by time (e.g. 7d, 30d, 2026-01-01)
+        #[arg(long)]
+        since: Option<String>,
+        /// Filter by entity name
+        #[arg(long)]
+        entity: Option<String>,
+        /// Output LLM-optimized context format
+        #[arg(long)]
+        context: bool,
+    },
+    /// Rate a session (1-5) with optional tags
+    Rate {
+        /// Session ID prefix
+        id: String,
+        /// Rating (1-5)
+        rating: u8,
+        /// Tags (can be repeated)
+        #[arg(long)]
+        tag: Vec<String>,
+    },
+    /// Show usage analytics and cost anomalies
+    Analytics,
+    /// Suggest context from past sessions
+    Suggest {
+        /// Find sessions that touched this file
+        #[arg(long)]
+        file: Option<String>,
+        /// Find sessions about this entity/concept
+        #[arg(long)]
+        entity: Option<String>,
+        /// Estimate cost for a task description
+        #[arg(long)]
+        cost: Option<String>,
     },
     /// Knowledge graph: entity extraction and relationship queries
     Graph {
@@ -155,6 +208,8 @@ enum GraphAction {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Remove invalid entities (stopwords, empty names, noise)
+    Cleanup,
 }
 
 #[derive(Subcommand)]
@@ -190,6 +245,11 @@ fn default_data_dir() -> PathBuf {
 fn main() {
     let cli = Cli::parse();
     let data_dir = cli.data_dir.unwrap_or_else(default_data_dir);
+    let format = if cli.machine {
+        OutputFormat::Machine
+    } else {
+        OutputFormat::Human
+    };
 
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         eprintln!("Error creating data directory: {e}");
@@ -256,8 +316,37 @@ fn main() {
             };
             cmd_report::run(&db_path, since, days, output.as_deref(), open)
         }
-        Commands::Index { reindex } => cmd_index::run(&data_dir, reindex),
-        Commands::Search { query, limit } => cmd_search::run(&data_dir, &query, limit),
+        Commands::Rate { id, rating, tag } => {
+            let tags = if tag.is_empty() { None } else { Some(tag) };
+            cmd_rate::run(&db_path, &id, rating, tags)
+        }
+        Commands::Analytics => cmd_analytics::run(&db_path, format),
+        Commands::Suggest { file, entity, cost } => cmd_suggest::run(
+            &data_dir,
+            file.as_deref(),
+            entity.as_deref(),
+            cost.as_deref(),
+        ),
+        Commands::Index { reindex, model } => cmd_index::run(&data_dir, reindex, &model),
+        Commands::Search {
+            query,
+            limit,
+            project,
+            since,
+            entity: _entity,
+            context,
+        } => cmd_search::run(
+            &data_dir,
+            &query,
+            limit,
+            if context {
+                OutputFormat::Context
+            } else {
+                format
+            },
+            project.as_deref(),
+            since.as_deref(),
+        ),
         Commands::Graph { action } => {
             let graph_path = data_dir.join("graph.db");
             match action {
@@ -280,6 +369,7 @@ fn main() {
                 GraphAction::Communities { limit } => {
                     cmd_graph::run_communities(&graph_path, limit)
                 }
+                GraphAction::Cleanup => cmd_graph::run_cleanup(&graph_path),
             }
         }
     };
