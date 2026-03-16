@@ -166,8 +166,8 @@ impl VectorStore {
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
         if let Some(p) = project {
-            sql.push_str(&format!(" AND project = ?{}", param_values.len() + 1));
-            param_values.push(Box::new(p.to_string()));
+            sql.push_str(&format!(" AND project LIKE ?{}", param_values.len() + 1));
+            param_values.push(Box::new(format!("%{p}%")));
         }
         if let Some(s) = since {
             sql.push_str(&format!(" AND started_at >= ?{}", param_values.len() + 1));

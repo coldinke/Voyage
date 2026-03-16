@@ -1,7 +1,10 @@
 mod cmd_analytics;
+mod cmd_bank;
+mod cmd_distill;
 mod cmd_graph;
 mod cmd_index;
 mod cmd_ingest;
+mod cmd_profile;
 mod cmd_rate;
 mod cmd_report;
 mod cmd_search;
@@ -22,14 +25,14 @@ pub enum OutputFormat {
 }
 
 #[derive(Parser)]
-#[command(name = "voyage", about = "LLM token analytics & knowledge platform")]
+#[command(name = "voyage", about = "LLM session analytics & knowledge platform")]
 struct Cli {
     /// Path to the data directory (default: ~/.voyage)
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
 
     /// Output machine-readable JSON instead of human-friendly text
-    #[arg(long, global = true)]
+    #[arg(long, short = 'j', global = true)]
     machine: bool,
 
     #[command(subcommand)]
@@ -43,11 +46,14 @@ enum Commands {
         /// Source directory (defaults depend on provider)
         #[arg(long)]
         source: Option<PathBuf>,
-        /// Provider: claude-code or opencode (default: ingest all)
+        /// Provider: claude-code, opencode, or codex (default: ingest all)
         #[arg(long)]
         provider: Option<String>,
+        /// Recalculate summaries for all sessions
+        #[arg(long)]
+        resummarize: bool,
     },
-    /// Show token usage statistics
+    /// Show token usage statistics and analytics
     Stats {
         /// Show stats for the last N days
         #[arg(long, default_value = "1")]
@@ -59,22 +65,69 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
         /// Break down by model
-        #[arg(long, conflicts_with_all = ["daily", "blocks", "by_provider"])]
+        #[arg(long, conflicts_with_all = ["daily", "blocks", "by_provider", "anomalies"])]
         by_model: bool,
         /// Show daily usage trend
-        #[arg(long, conflicts_with_all = ["by_model", "blocks", "by_provider"])]
+        #[arg(long, conflicts_with_all = ["by_model", "blocks", "by_provider", "anomalies"])]
         daily: bool,
         /// Show 5-hour billing window stats
-        #[arg(long, conflicts_with_all = ["by_model", "daily", "by_provider"])]
+        #[arg(long, conflicts_with_all = ["by_model", "daily", "by_provider", "anomalies"])]
         blocks: bool,
         /// Break down by provider
-        #[arg(long, conflicts_with_all = ["by_model", "daily", "blocks"])]
+        #[arg(long, conflicts_with_all = ["by_model", "daily", "blocks", "anomalies"])]
         by_provider: bool,
+        /// Show tool usage and cost anomalies
+        #[arg(long, conflicts_with_all = ["by_model", "daily", "blocks", "by_provider"])]
+        anomalies: bool,
     },
     /// List and inspect sessions
     Session {
         #[command(subcommand)]
         action: SessionAction,
+    },
+    /// Show details of a session or knowledge item (auto-detect by ID)
+    Show {
+        /// Session or knowledge item ID (full UUID, prefix, or knowledge ID)
+        id: String,
+    },
+    /// Search across sessions and knowledge
+    Search {
+        /// Search query
+        query: String,
+        /// Maximum number of results
+        #[arg(long, short = 'n', default_value = "10")]
+        limit: usize,
+        /// Filter by project name
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter by time (e.g. 7d, 30d, 2026-01-01)
+        #[arg(long)]
+        since: Option<String>,
+        /// Filter by entity name
+        #[arg(long)]
+        entity: Option<String>,
+        /// Output LLM-optimized context format
+        #[arg(long)]
+        context: bool,
+        /// Search knowledge bank instead of sessions
+        #[arg(long)]
+        bank: bool,
+        /// Find sessions that touched this file
+        #[arg(long)]
+        file: Option<String>,
+        /// Estimate cost for a task description
+        #[arg(long)]
+        cost_estimate: bool,
+    },
+    /// Rate a session (1-5) with optional tags
+    Rate {
+        /// Session ID prefix
+        id: String,
+        /// Rating (1-5)
+        rating: u8,
+        /// Tags (can be repeated)
+        #[arg(long)]
+        tag: Vec<String>,
     },
     /// Generate an HTML visual report
     Report {
@@ -100,54 +153,30 @@ enum Commands {
         #[arg(long, default_value = "mini")]
         model: String,
     },
-    /// Semantic search across sessions
-    Search {
-        /// Search query
-        query: String,
-        /// Maximum number of results
-        #[arg(long, default_value = "10")]
-        limit: usize,
-        /// Filter by project name
+    /// Extract knowledge from sessions into the knowledge bank
+    Distill {
+        /// Reprocess all sessions (clear distillation log)
         #[arg(long)]
-        project: Option<String>,
-        /// Filter by time (e.g. 7d, 30d, 2026-01-01)
+        reprocess: bool,
+        /// Run promotion after extraction (Level 1 → Level 2)
         #[arg(long)]
-        since: Option<String>,
-        /// Filter by entity name
-        #[arg(long)]
-        entity: Option<String>,
-        /// Output LLM-optimized context format
-        #[arg(long)]
-        context: bool,
+        promote: bool,
     },
-    /// Rate a session (1-5) with optional tags
-    Rate {
-        /// Session ID prefix
-        id: String,
-        /// Rating (1-5)
-        rating: u8,
-        /// Tags (can be repeated)
-        #[arg(long)]
-        tag: Vec<String>,
+    /// Browse and search the knowledge bank
+    Bank {
+        #[command(subcommand)]
+        action: Option<BankAction>,
     },
-    /// Show usage analytics and cost anomalies
-    Analytics,
-    /// Suggest context from past sessions
-    Suggest {
-        /// Find sessions that touched this file
+    /// Show or refresh the user profile
+    Profile {
+        /// Recompute the profile from all data
         #[arg(long)]
-        file: Option<String>,
-        /// Find sessions about this entity/concept
-        #[arg(long)]
-        entity: Option<String>,
-        /// Estimate cost for a task description
-        #[arg(long)]
-        cost: Option<String>,
+        refresh: bool,
     },
     /// Knowledge graph: entity extraction and relationship queries
     Graph {
         #[command(subcommand)]
-        action: GraphAction,
+        action: Option<GraphAction>,
     },
 }
 
@@ -164,12 +193,12 @@ enum GraphAction {
         #[arg(long, default_value = "30")]
         limit: usize,
     },
-    /// Show sessions that mention a specific entity
-    Mentions {
-        /// Entity name (e.g. src/auth.rs)
+    /// Show entity details: mentions, related entities, cost, and timeline
+    Show {
+        /// Entity name (e.g. src/auth.rs, authentication)
         name: String,
-        /// Maximum number of sessions to show
-        #[arg(long, default_value = "20")]
+        /// Maximum related entities / mentions to show
+        #[arg(long, default_value = "10")]
         limit: usize,
     },
     /// Extract entities from ingested sessions
@@ -177,24 +206,6 @@ enum GraphAction {
         /// Re-extract all sessions (clear existing graph data)
         #[arg(long)]
         reextract: bool,
-    },
-    /// Show entities related to a given entity (PMI-scored)
-    Related {
-        /// Entity name
-        name: String,
-        /// Maximum number of results
-        #[arg(long, default_value = "20")]
-        limit: usize,
-    },
-    /// Show total cost associated with an entity
-    Cost {
-        /// Entity name
-        name: String,
-    },
-    /// Show activity timeline for an entity
-    Timeline {
-        /// Entity name
-        name: String,
     },
     /// Show top entities by PageRank
     Rank {
@@ -210,6 +221,34 @@ enum GraphAction {
     },
     /// Remove invalid entities (stopwords, empty names, noise)
     Cleanup,
+}
+
+#[derive(Subcommand)]
+enum BankAction {
+    /// List knowledge items
+    List {
+        /// Filter by kind: world, experience, opinion, entity_page
+        #[arg(long)]
+        kind: Option<String>,
+        /// Maximum number of items
+        #[arg(long, default_value = "30")]
+        limit: usize,
+    },
+    /// Show full details of a knowledge item
+    Show {
+        /// Knowledge item ID (or prefix)
+        id: String,
+    },
+    /// Search knowledge items
+    Search {
+        /// Search query
+        query: String,
+        /// Maximum results
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Output a MEMORY.md-style summary of top knowledge
+    Memory,
 }
 
 #[derive(Subcommand)]
@@ -259,9 +298,25 @@ fn main() {
     let db_path = data_dir.join("voyage.db");
 
     let result = match cli.command {
-        Commands::Ingest { source, provider } => {
-            cmd_ingest::run(&db_path, source, provider.as_deref())
+        // ── Data Pipeline ──
+        Commands::Ingest {
+            source,
+            provider,
+            resummarize,
+        } => {
+            if resummarize {
+                cmd_ingest::run_resummarize(&db_path)
+            } else {
+                cmd_ingest::run(&db_path, source, provider.as_deref())
+            }
         }
+        Commands::Index { reindex, model } => cmd_index::run(&data_dir, reindex, &model),
+        Commands::Distill {
+            reprocess,
+            promote,
+        } => cmd_distill::run(&db_path, reprocess, promote),
+
+        // ── Stats (merged: stats + analytics) ──
         Commands::Stats {
             days,
             all,
@@ -270,23 +325,30 @@ fn main() {
             daily,
             blocks,
             by_provider,
+            anomalies,
         } => {
-            let since = if all {
-                None
+            if anomalies {
+                cmd_analytics::run(&db_path, format)
             } else {
-                Some(Utc::now() - Duration::days(days as i64))
-            };
-            cmd_stats::run(&cmd_stats::StatsOptions {
-                db_path: &db_path,
-                since,
-                days,
-                project: project.as_deref(),
-                by_model,
-                daily,
-                blocks,
-                by_provider,
-            })
+                let since = if all {
+                    None
+                } else {
+                    Some(Utc::now() - Duration::days(days as i64))
+                };
+                cmd_stats::run(&cmd_stats::StatsOptions {
+                    db_path: &db_path,
+                    since,
+                    days,
+                    project: project.as_deref(),
+                    by_model,
+                    daily,
+                    blocks,
+                    by_provider,
+                })
+            }
         }
+
+        // ── Session ──
         Commands::Session { action } => match action {
             SessionAction::List {
                 days,
@@ -303,6 +365,70 @@ fn main() {
             }
             SessionAction::Show { id } => cmd_session::run_show(&db_path, &id),
         },
+
+        // ── Show (top-level shortcut: auto-detect session vs knowledge item) ──
+        Commands::Show { id } => run_show(&db_path, &id),
+
+        // ── Search (merged: search + suggest) ──
+        Commands::Search {
+            query,
+            limit,
+            project,
+            since,
+            entity,
+            context,
+            bank,
+            file,
+            cost_estimate,
+        } => {
+            // --file: suggest by file (delegates to suggest logic)
+            if let Some(file_name) = file {
+                return exit_result(cmd_suggest::run(
+                    &data_dir,
+                    Some(&file_name),
+                    None,
+                    None,
+                ));
+            }
+            // --cost-estimate: suggest cost
+            if cost_estimate {
+                return exit_result(cmd_suggest::run(&data_dir, None, None, Some(&query)));
+            }
+            // --entity: suggest by entity
+            if let Some(ref entity_name) = entity {
+                return exit_result(cmd_suggest::run(
+                    &data_dir,
+                    None,
+                    Some(entity_name),
+                    None,
+                ));
+            }
+            // --bank: search knowledge bank via FTS
+            if bank {
+                return exit_result(cmd_bank::run_search(&db_path, &query, limit));
+            }
+            // Default: hybrid semantic + FTS search
+            cmd_search::run(
+                &data_dir,
+                &query,
+                limit,
+                if context {
+                    OutputFormat::Context
+                } else {
+                    format
+                },
+                project.as_deref(),
+                since.as_deref(),
+            )
+        }
+
+        // ── Rate ──
+        Commands::Rate { id, rating, tag } => {
+            let tags = if tag.is_empty() { None } else { Some(tag) };
+            cmd_rate::run(&db_path, &id, rating, tags)
+        }
+
+        // ── Report ──
         Commands::Report {
             days,
             all,
@@ -316,64 +442,65 @@ fn main() {
             };
             cmd_report::run(&db_path, since, days, output.as_deref(), open)
         }
-        Commands::Rate { id, rating, tag } => {
-            let tags = if tag.is_empty() { None } else { Some(tag) };
-            cmd_rate::run(&db_path, &id, rating, tags)
-        }
-        Commands::Analytics => cmd_analytics::run(&db_path, format),
-        Commands::Suggest { file, entity, cost } => cmd_suggest::run(
-            &data_dir,
-            file.as_deref(),
-            entity.as_deref(),
-            cost.as_deref(),
-        ),
-        Commands::Index { reindex, model } => cmd_index::run(&data_dir, reindex, &model),
-        Commands::Search {
-            query,
-            limit,
-            project,
-            since,
-            entity: _entity,
-            context,
-        } => cmd_search::run(
-            &data_dir,
-            &query,
-            limit,
-            if context {
-                OutputFormat::Context
-            } else {
-                format
-            },
-            project.as_deref(),
-            since.as_deref(),
-        ),
+
+        // ── Knowledge Bank ──
+        Commands::Bank { action } => match action {
+            None => cmd_bank::run_overview(&db_path),
+            Some(BankAction::List { kind, limit }) => {
+                cmd_bank::run_list(&db_path, kind.as_deref(), limit)
+            }
+            Some(BankAction::Show { id }) => cmd_bank::run_show(&db_path, &id),
+            Some(BankAction::Search { query, limit }) => {
+                cmd_bank::run_search(&db_path, &query, limit)
+            }
+            Some(BankAction::Memory) => cmd_bank::run_memory(&db_path),
+        },
+
+        // ── Profile ──
+        Commands::Profile { refresh } => cmd_profile::run(&db_path, refresh, format),
+
+        // ── Graph (merged: stats default, show combines mentions+related+cost+timeline) ──
         Commands::Graph { action } => {
             let graph_path = data_dir.join("graph.db");
             match action {
-                GraphAction::Stats => cmd_graph::run_stats(&graph_path),
-                GraphAction::List { kind, limit } => {
+                None => cmd_graph::run_stats(&graph_path),
+                Some(GraphAction::Stats) => cmd_graph::run_stats(&graph_path),
+                Some(GraphAction::List { kind, limit }) => {
                     cmd_graph::run_list(&graph_path, kind.as_deref(), limit)
                 }
-                GraphAction::Mentions { name, limit } => {
-                    cmd_graph::run_mentions(&graph_path, &db_path, &name, limit)
+                Some(GraphAction::Show { name, limit }) => {
+                    cmd_graph::run_show(&graph_path, &db_path, &name, limit)
                 }
-                GraphAction::Extract { reextract } => {
+                Some(GraphAction::Extract { reextract }) => {
                     cmd_graph::run_extract(&graph_path, &db_path, reextract)
                 }
-                GraphAction::Related { name, limit } => {
-                    cmd_graph::run_related(&graph_path, &name, limit)
-                }
-                GraphAction::Cost { name } => cmd_graph::run_cost(&graph_path, &db_path, &name),
-                GraphAction::Timeline { name } => cmd_graph::run_timeline(&graph_path, &name),
-                GraphAction::Rank { limit } => cmd_graph::run_rank(&graph_path, limit),
-                GraphAction::Communities { limit } => {
+                Some(GraphAction::Rank { limit }) => cmd_graph::run_rank(&graph_path, limit),
+                Some(GraphAction::Communities { limit }) => {
                     cmd_graph::run_communities(&graph_path, limit)
                 }
-                GraphAction::Cleanup => cmd_graph::run_cleanup(&graph_path),
+                Some(GraphAction::Cleanup) => cmd_graph::run_cleanup(&graph_path),
             }
         }
     };
 
+    exit_result(result);
+}
+
+/// `voyage show <id>` — auto-detect session ID vs knowledge item ID.
+fn run_show(db_path: &std::path::Path, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Knowledge item IDs have a kind prefix (e.g. "world-", "experience-")
+    if id.starts_with("world-")
+        || id.starts_with("experience-")
+        || id.starts_with("opinion-")
+        || id.starts_with("entity_page-")
+    {
+        return cmd_bank::run_show(db_path, id);
+    }
+    // Otherwise treat as session ID
+    cmd_session::run_show(db_path, id)
+}
+
+fn exit_result(result: Result<(), Box<dyn std::error::Error>>) {
     if let Err(e) = result {
         eprintln!("Error: {e}");
         std::process::exit(1);

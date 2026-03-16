@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use voyage_core::model::{Message, Role, Session, extract_summary, merge_parsed_sessions};
+use voyage_core::model::{
+    Message, Role, Session, extract_summary, extract_task_description, merge_parsed_sessions,
+};
 use voyage_graph::store::GraphStore;
 use voyage_parser::claude_code::ClaudeCodeParser;
 use voyage_parser::codex::CodexParser;
@@ -21,16 +23,21 @@ enum Upsert {
     Empty,
 }
 
-/// Compute summary for a session if not already set (e.g. by OpenCode title).
+/// Compute summary for a session.
+/// Always recalculates using the latest extraction logic, unless the session
+/// has an explicit title (OpenCode) that isn't a generic auto-title.
 fn compute_summary(session: &mut Session, messages: &[Message]) {
-    if !session.summary.is_empty() {
-        return;
-    }
     let first_user = messages
         .iter()
         .find(|m| m.role == Role::User)
         .map(|m| m.content.as_str());
-    session.summary = extract_summary(None, first_user, &session.model, &session.project);
+    // Preserve explicit non-generic titles from OpenCode
+    let existing_title = if !session.summary.is_empty() {
+        Some(session.summary.as_str())
+    } else {
+        None
+    };
+    session.summary = extract_summary(existing_title, first_user, &session.model, &session.project);
 }
 
 fn classify(store: &SqliteStore, session: &Session) -> Result<Upsert, Box<dyn std::error::Error>> {
@@ -110,6 +117,55 @@ fn apply_with_context(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let upsert = classify(store, session)?;
     apply(store, graph, session, messages, label, &upsert, counters)
+}
+
+/// Recalculate summaries for all sessions using the latest extraction logic.
+pub fn run_resummarize(db_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let store = SqliteStore::open(db_path)?;
+    let sessions = store.list_sessions(None, None, 100_000)?;
+    let mut updated = 0u32;
+
+    for session in &sessions {
+        let messages = store.get_messages_by_session(&session.id, 10_000)?;
+        let first_user = messages
+            .iter()
+            .find(|m| m.role == Role::User)
+            .map(|m| m.content.as_str());
+
+        let new_summary = extract_summary(None, first_user, &session.model, &session.project);
+        let task_desc = extract_task_description(&messages);
+
+        if new_summary != session.summary {
+            store.update_summary(&session.id, &new_summary)?;
+            println!(
+                "  {} {} → {}",
+                &session.id.to_string()[..8],
+                truncate_for_display(&session.summary, 30),
+                truncate_for_display(&new_summary, 40),
+            );
+            updated += 1;
+        }
+
+        // Always update task_description and FTS
+        store.update_task_description(&session.id, &task_desc)?;
+        let _ = store.upsert_fts(&session.id, &new_summary, &task_desc);
+    }
+
+    println!("\nResumarized: {updated} of {} sessions updated", sessions.len());
+    Ok(())
+}
+
+fn truncate_for_display(s: &str, max: usize) -> String {
+    let first_line = s.lines().next().unwrap_or(s);
+    if first_line.len() <= max {
+        first_line.to_string()
+    } else {
+        let mut end = max;
+        while !first_line.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        format!("{}...", &first_line[..end])
+    }
 }
 
 pub fn run(

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -132,6 +134,153 @@ impl Session {
     }
 }
 
+// ── Knowledge Bank types ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeKind {
+    World,
+    Experience,
+    Opinion,
+    EntityPage,
+}
+
+impl KnowledgeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::World => "world",
+            Self::Experience => "experience",
+            Self::Opinion => "opinion",
+            Self::EntityPage => "entity_page",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "world" => Self::World,
+            "experience" => Self::Experience,
+            "opinion" => Self::Opinion,
+            "entity_page" => Self::EntityPage,
+            _ => Self::World,
+        }
+    }
+}
+
+impl std::fmt::Display for KnowledgeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeItem {
+    pub id: String,
+    pub kind: KnowledgeKind,
+    pub level: u8, // 1=session, 2=aggregated, 3=profile
+    pub title: String,
+    pub content: String,
+    pub confidence: f64,
+    pub source_session_id: Option<Uuid>,
+    pub source_date: String,
+    pub superseded_by: Option<String>,
+    pub mention_count: u32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl KnowledgeItem {
+    pub fn new(
+        kind: KnowledgeKind,
+        title: String,
+        content: String,
+        source_session_id: Option<Uuid>,
+        source_date: String,
+    ) -> Self {
+        let now = Utc::now().to_rfc3339();
+        let id = format!(
+            "{}-{}",
+            kind.as_str(),
+            &Uuid::new_v4().to_string()[..8]
+        );
+        Self {
+            id,
+            kind,
+            level: 1,
+            title,
+            content,
+            confidence: 1.0,
+            source_session_id,
+            source_date,
+            superseded_by: None,
+            mention_count: 1,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    /// Compute word-set Jaccard similarity between this item's title and another.
+    pub fn title_similarity(&self, other_title: &str) -> f64 {
+        let a: HashSet<&str> = self.title.split_whitespace().collect();
+        let b: HashSet<&str> = other_title.split_whitespace().collect();
+        if a.is_empty() && b.is_empty() {
+            return 1.0;
+        }
+        let intersection = a.intersection(&b).count();
+        let union = a.union(&b).count();
+        if union == 0 {
+            return 0.0;
+        }
+        intersection as f64 / union as f64
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UserProfile {
+    pub tech_stack: Vec<TechStackEntry>,
+    pub working_style: WorkingStyle,
+    pub expertise_areas: Vec<ExpertiseArea>,
+    pub preferences: Vec<Preference>,
+    pub cost_patterns: CostPatterns,
+    pub computed_at: String,
+    pub session_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TechStackEntry {
+    pub name: String,
+    pub frequency: u32,
+    pub last_seen: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkingStyle {
+    pub avg_turns: f64,
+    pub avg_cost: f64,
+    pub preferred_hours: Vec<u32>, // hour histogram
+    pub plans_first: f64,          // ratio of sessions starting with plans
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpertiseArea {
+    pub area: String,
+    pub confidence: f64,
+    pub session_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Preference {
+    pub key: String,
+    pub value: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CostPatterns {
+    pub avg: f64,
+    pub p50: f64,
+    pub p90: f64,
+}
+
 /// Merge a secondary session's messages into a primary session.
 ///
 /// Messages are appended and sorted by timestamp, then session stats are
@@ -229,16 +378,19 @@ fn clean_user_message_for_summary(msg: &str) -> String {
         }
     }
 
-    // If it starts with an XML tag (e.g. <local-command-caveat>), skip XML content
+    // If it starts with an XML tag, try to extract meaningful content
     if msg.starts_with('<') {
+        // Try to extract inner text from command tags like <command-message>foo</command-message>
+        if let Some(inner) = extract_xml_inner_text(msg, &["command-message", "command-args"]) {
+            if !inner.is_empty() && !inner.starts_with('<') {
+                return inner;
+            }
+        }
         // Skip lines that are empty, XML tags, or XML tag content (between open/close tags)
         let mut in_tag = false;
         for line in msg.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
-                if !in_tag {
-                    continue;
-                }
                 continue;
             }
             if trimmed.starts_with('<') && !trimmed.starts_with("</") {
@@ -259,6 +411,30 @@ fn clean_user_message_for_summary(msg: &str) -> String {
     // Take content up to first newline or sentence boundary for clean summaries
     let first_line = msg.lines().next().unwrap_or(msg).trim();
     first_line.to_string()
+}
+
+/// Try to extract inner text from allowed XML tags like `<command-message>text</command-message>`.
+/// Only extracts from tags in the allowed list to avoid pulling noise content.
+fn extract_xml_inner_text(s: &str, allowed_tags: &[&str]) -> Option<String> {
+    let s = s.trim();
+    if !s.starts_with('<') {
+        return None;
+    }
+    // Find closing > of the opening tag
+    let tag_end = s.find('>')?;
+    let tag_name = &s[1..tag_end];
+    let tag_name = tag_name.split_whitespace().next()?;
+    // Only extract from allowed tags
+    if !allowed_tags.contains(&tag_name) {
+        return None;
+    }
+    let close_tag = format!("</{tag_name}>");
+    let close_pos = s.find(&close_tag)?;
+    let inner = s[tag_end + 1..close_pos].trim();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner.to_string())
 }
 
 /// Extract a task description from all user messages for embedding/FTS.

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
 use uuid::Uuid;
 
-use voyage_core::model::{Message, Provider, Role, Session, TokenUsage};
+use voyage_core::model::{KnowledgeItem, KnowledgeKind, Message, Provider, Role, Session, TokenUsage, UserProfile};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -116,6 +116,59 @@ impl SqliteStore {
                 session_id UNINDEXED,
                 summary,
                 task_description,
+                tokenize='porter unicode61'
+            );",
+        );
+
+        // Knowledge Bank tables
+        self.conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS knowledge_items (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 1,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                source_session_id TEXT,
+                source_date TEXT NOT NULL,
+                superseded_by TEXT,
+                mention_count INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS knowledge_sources (
+                knowledge_id TEXT NOT NULL,
+                source_item_id TEXT NOT NULL,
+                PRIMARY KEY (knowledge_id, source_item_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_profile (
+                id TEXT PRIMARY KEY DEFAULT 'global',
+                tech_stack TEXT DEFAULT '[]',
+                working_style TEXT DEFAULT '{}',
+                expertise_areas TEXT DEFAULT '[]',
+                preferences TEXT DEFAULT '[]',
+                cost_patterns TEXT DEFAULT '{}',
+                computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+                session_count INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS distillation_log (
+                session_id TEXT PRIMARY KEY,
+                distilled_at TEXT NOT NULL,
+                item_count INTEGER DEFAULT 0
+            );
+            ",
+        )?;
+
+        // Knowledge FTS
+        let _ = self.conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+                knowledge_id UNINDEXED,
+                title,
+                content,
                 tokenize='porter unicode61'
             );",
         );
@@ -825,12 +878,12 @@ impl SqliteStore {
         let rows = stmt
             .query_map(params![session_id.to_string()], |row| {
                 let content: String = row.get(7)?;
-                let preview = if content.len() > 60 {
+                let preview = if content.chars().count() > 60 {
                     let end = content
                         .char_indices()
                         .nth(57)
                         .map(|(i, _)| i)
-                        .unwrap_or(content.len().min(57));
+                        .unwrap_or(content.len());
                     format!("{}...", &content[..end])
                 } else {
                     content
@@ -872,6 +925,28 @@ impl SqliteStore {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(rows)
+    }
+
+    /// Update the summary for a session.
+    pub fn update_summary(&self, session_id: &Uuid, summary: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE sessions SET summary = ?1 WHERE id = ?2",
+            params![summary, session_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Update the task_description for a session.
+    pub fn update_task_description(
+        &self,
+        session_id: &Uuid,
+        task_description: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE sessions SET task_description = ?1 WHERE id = ?2",
+            params![task_description, session_id.to_string()],
+        )?;
+        Ok(())
     }
 
     // ── FTS5 ──
@@ -976,6 +1051,271 @@ impl SqliteStore {
             Err(e) => Err(e.into()),
         }
     }
+
+    // ── Knowledge Bank ──
+
+    /// Insert or update a knowledge item. Returns true if newly inserted.
+    pub fn upsert_knowledge_item(&self, item: &KnowledgeItem) -> Result<bool, StoreError> {
+        let rows = self.conn.execute(
+            "INSERT INTO knowledge_items
+             (id, kind, level, title, content, confidence, source_session_id,
+              source_date, superseded_by, mention_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(id) DO UPDATE SET
+                 level = excluded.level,
+                 title = excluded.title,
+                 content = excluded.content,
+                 confidence = excluded.confidence,
+                 superseded_by = excluded.superseded_by,
+                 mention_count = excluded.mention_count,
+                 updated_at = excluded.updated_at",
+            params![
+                item.id,
+                item.kind.as_str(),
+                item.level as i64,
+                item.title,
+                item.content,
+                item.confidence,
+                item.source_session_id.map(|s| s.to_string()),
+                item.source_date,
+                item.superseded_by,
+                item.mention_count as i64,
+                item.created_at,
+                item.updated_at,
+            ],
+        )?;
+        // Also upsert into FTS
+        let _ = self.upsert_knowledge_fts(&item.id, &item.title, &item.content);
+        Ok(rows > 0)
+    }
+
+    /// Get all active (non-superseded) knowledge items, optionally filtered.
+    pub fn list_knowledge_items(
+        &self,
+        kind: Option<KnowledgeKind>,
+        level: Option<u8>,
+        limit: usize,
+    ) -> Result<Vec<KnowledgeItem>, StoreError> {
+        let mut sql = String::from(
+            "SELECT id, kind, level, title, content, confidence, source_session_id,
+                    source_date, superseded_by, mention_count, created_at, updated_at
+             FROM knowledge_items WHERE superseded_by IS NULL",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(k) = kind {
+            sql.push_str(&format!(" AND kind = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(k.as_str().to_string()));
+        }
+        if let Some(l) = level {
+            sql.push_str(&format!(" AND level = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(l as i64));
+        }
+
+        sql.push_str(&format!(
+            " ORDER BY mention_count DESC, updated_at DESC LIMIT ?{}",
+            param_values.len() + 1
+        ));
+        param_values.push(Box::new(limit as i64));
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let items = stmt
+            .query_map(params_ref.as_slice(), |row| Ok(row_to_knowledge_item(row)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(items)
+    }
+
+    /// Get a knowledge item by ID or prefix.
+    pub fn get_knowledge_item(&self, id_prefix: &str) -> Result<Option<KnowledgeItem>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, level, title, content, confidence, source_session_id,
+                    source_date, superseded_by, mention_count, created_at, updated_at
+             FROM knowledge_items WHERE id LIKE ?1 LIMIT 1",
+        )?;
+        let pattern = format!("{id_prefix}%");
+        let result = stmt.query_row(params![pattern], |row| Ok(row_to_knowledge_item(row)));
+        match result {
+            Ok(item) => Ok(Some(item)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Count knowledge items by kind and level.
+    pub fn knowledge_counts(&self) -> Result<Vec<(String, i64, i64)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, level, COUNT(*) FROM knowledge_items
+             WHERE superseded_by IS NULL GROUP BY kind, level ORDER BY kind, level",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Search knowledge items using FTS5.
+    pub fn search_knowledge_fts(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<KnowledgeItem>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ki.id, ki.kind, ki.level, ki.title, ki.content, ki.confidence,
+                    ki.source_session_id, ki.source_date, ki.superseded_by,
+                    ki.mention_count, ki.created_at, ki.updated_at
+             FROM knowledge_fts kf
+             JOIN knowledge_items ki ON ki.id = kf.knowledge_id
+             WHERE knowledge_fts MATCH ?1
+             ORDER BY rank LIMIT ?2",
+        )?;
+        let items = stmt
+            .query_map(params![query, limit as i64], |row| {
+                Ok(row_to_knowledge_item(row))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(items)
+    }
+
+    fn upsert_knowledge_fts(
+        &self,
+        knowledge_id: &str,
+        title: &str,
+        content: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM knowledge_fts WHERE knowledge_id = ?1",
+            params![knowledge_id],
+        )?;
+        self.conn.execute(
+            "INSERT INTO knowledge_fts (knowledge_id, title, content) VALUES (?1, ?2, ?3)",
+            params![knowledge_id, title, content],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a session as distilled.
+    pub fn mark_distilled(
+        &self,
+        session_id: &Uuid,
+        item_count: u32,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO distillation_log (session_id, distilled_at, item_count)
+             VALUES (?1, datetime('now'), ?2)",
+            params![session_id.to_string(), item_count as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Check if a session has been distilled.
+    pub fn is_distilled(&self, session_id: &Uuid) -> Result<bool, StoreError> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM distillation_log WHERE session_id = ?1",
+            params![session_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Get undistilled session IDs.
+    pub fn undistilled_sessions(&self) -> Result<Vec<Uuid>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM sessions WHERE id NOT IN (SELECT session_id FROM distillation_log)
+             ORDER BY started_at ASC",
+        )?;
+        let ids = stmt
+            .query_map([], |row| {
+                let s: String = row.get(0)?;
+                Ok(Uuid::parse_str(&s).unwrap())
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
+    /// Save or update user profile.
+    pub fn save_profile(&self, profile: &UserProfile) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO user_profile
+             (id, tech_stack, working_style, expertise_areas, preferences, cost_patterns, computed_at, session_count)
+             VALUES ('global', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                serde_json::to_string(&profile.tech_stack).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&profile.working_style).unwrap_or_else(|_| "{}".into()),
+                serde_json::to_string(&profile.expertise_areas).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&profile.preferences).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&profile.cost_patterns).unwrap_or_else(|_| "{}".into()),
+                profile.computed_at,
+                profile.session_count as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load user profile.
+    pub fn load_profile(&self) -> Result<Option<UserProfile>, StoreError> {
+        let result = self.conn.query_row(
+            "SELECT tech_stack, working_style, expertise_areas, preferences, cost_patterns, computed_at, session_count
+             FROM user_profile WHERE id = 'global'",
+            [],
+            |row| {
+                let tech_stack_json: String = row.get(0)?;
+                let working_style_json: String = row.get(1)?;
+                let expertise_json: String = row.get(2)?;
+                let preferences_json: String = row.get(3)?;
+                let cost_json: String = row.get(4)?;
+                Ok(UserProfile {
+                    tech_stack: serde_json::from_str(&tech_stack_json).unwrap_or_default(),
+                    working_style: serde_json::from_str(&working_style_json).unwrap_or_default(),
+                    expertise_areas: serde_json::from_str(&expertise_json).unwrap_or_default(),
+                    preferences: serde_json::from_str(&preferences_json).unwrap_or_default(),
+                    cost_patterns: serde_json::from_str(&cost_json).unwrap_or_default(),
+                    computed_at: row.get(5)?,
+                    session_count: row.get::<_, i64>(6)? as u32,
+                })
+            },
+        );
+        match result {
+            Ok(p) => Ok(Some(p)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get session rating for a session.
+    pub fn get_session_rating(&self, session_id: &Uuid) -> Result<Option<u8>, StoreError> {
+        self.get_rating(session_id)
+    }
+
+    /// Get cost percentiles from all sessions.
+    pub fn get_cost_percentiles(&self) -> Result<(f64, f64, f64), StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT estimated_cost_usd FROM sessions ORDER BY estimated_cost_usd ASC",
+        )?;
+        let costs: Vec<f64> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if costs.is_empty() {
+            return Ok((0.0, 0.0, 0.0));
+        }
+        let avg = costs.iter().sum::<f64>() / costs.len() as f64;
+        let p50 = costs[costs.len() / 2];
+        let p90_idx = (costs.len() as f64 * 0.9) as usize;
+        let p90 = costs[p90_idx.min(costs.len() - 1)];
+        Ok((avg, p50, p90))
+    }
+
+    /// Expose connection for knowledge extraction queries.
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1074,6 +1414,26 @@ fn role_to_str(r: Role) -> &'static str {
         Role::User => "user",
         Role::Assistant => "assistant",
         Role::System => "system",
+    }
+}
+
+fn row_to_knowledge_item(row: &rusqlite::Row) -> KnowledgeItem {
+    KnowledgeItem {
+        id: row.get(0).unwrap(),
+        kind: KnowledgeKind::parse(&row.get::<_, String>(1).unwrap()),
+        level: row.get::<_, i64>(2).unwrap() as u8,
+        title: row.get(3).unwrap(),
+        content: row.get(4).unwrap(),
+        confidence: row.get(5).unwrap(),
+        source_session_id: row
+            .get::<_, Option<String>>(6)
+            .unwrap()
+            .and_then(|s| Uuid::parse_str(&s).ok()),
+        source_date: row.get(7).unwrap(),
+        superseded_by: row.get(8).unwrap(),
+        mention_count: row.get::<_, i64>(9).unwrap() as u32,
+        created_at: row.get(10).unwrap(),
+        updated_at: row.get(11).unwrap(),
     }
 }
 
