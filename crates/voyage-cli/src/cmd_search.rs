@@ -28,17 +28,17 @@ const SIGNAL_KINDS: &[EntityKind] = &[
 ];
 
 #[derive(Clone, serde::Serialize)]
-struct EntitySummary {
+pub struct EntitySummary {
     kind: String,
     name: String,
     mentions: u32,
 }
 
-struct EnrichedResult {
-    result: SearchResult,
-    session: Option<Session>,
-    entities: Vec<EntitySummary>,
-    rating: Option<u8>,
+pub struct EnrichedResult {
+    pub result: SearchResult,
+    pub session: Option<Session>,
+    pub entities: Vec<EntitySummary>,
+    pub rating: Option<u8>,
 }
 
 #[derive(serde::Serialize)]
@@ -128,7 +128,7 @@ fn format_results_human(query: &str, total_indexed: u64, results: &[EnrichedResu
     out
 }
 
-fn format_results_context(results: &[EnrichedResult]) -> String {
+pub fn format_results_context(results: &[EnrichedResult]) -> String {
     if results.is_empty() {
         return "No relevant past sessions found.".to_string();
     }
@@ -246,25 +246,23 @@ fn parse_since(since: &str) -> Option<String> {
     None
 }
 
-pub fn run(
+/// Core search logic returning enriched results. Used by both `run()` and `cmd_context`.
+pub fn search_enriched(
     data_dir: &Path,
     query: &str,
     limit: usize,
-    format: OutputFormat,
     project: Option<&str>,
     since: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<EnrichedResult>, Box<dyn std::error::Error>> {
     let vectors_db = data_dir.join("vectors.db");
     if !vectors_db.exists() {
-        eprintln!("No vector index yet. Run `voyage index` first.");
-        return Ok(());
+        return Ok(vec![]);
     }
 
     let vector_store = VectorStore::open(&vectors_db)?;
     let count = vector_store.count()?;
     if count == 0 {
-        eprintln!("Vector index is empty. Run `voyage index` first.");
-        return Ok(());
+        return Ok(vec![]);
     }
 
     eprintln!("Loading embedding model...");
@@ -419,9 +417,36 @@ pub fn run(
         })
         .collect();
 
+    Ok(enriched)
+}
+
+pub fn run(
+    data_dir: &Path,
+    query: &str,
+    limit: usize,
+    format: OutputFormat,
+    project: Option<&str>,
+    since: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let enriched = search_enriched(data_dir, query, limit, project, since)?;
+
+    if enriched.is_empty() {
+        let vectors_db = data_dir.join("vectors.db");
+        if !vectors_db.exists() {
+            eprintln!("No vector index yet. Run `voyage index` first.");
+        } else {
+            eprintln!("No results found for: \"{query}\"");
+        }
+        return Ok(());
+    }
+
+    let total_indexed = VectorStore::open(&data_dir.join("vectors.db"))
+        .and_then(|vs| vs.count())
+        .unwrap_or(0);
+
     let output = match format {
-        OutputFormat::Human => format_results_human(query, count, &enriched),
-        OutputFormat::Machine => format_results_machine(query, count, &enriched),
+        OutputFormat::Human => format_results_human(query, total_indexed, &enriched),
+        OutputFormat::Machine => format_results_machine(query, total_indexed, &enriched),
         OutputFormat::Context => format_results_context(&enriched),
     };
     println!("{output}");

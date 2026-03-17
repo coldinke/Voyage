@@ -11,10 +11,14 @@ pub fn run(
     let store = SqliteStore::open(db_path)?;
 
     let session_ids = if reprocess {
-        // Clear distillation log and reprocess all
+        // Clear distillation log and existing knowledge for clean reprocess
+        store.conn().execute("DELETE FROM distillation_log", [])?;
         store
             .conn()
-            .execute("DELETE FROM distillation_log", [])?;
+            .execute("DELETE FROM knowledge_items", [])?;
+        store
+            .conn()
+            .execute("DELETE FROM knowledge_fts", [])?;
         store.undistilled_sessions()?
     } else {
         store.undistilled_sessions()?
@@ -32,8 +36,8 @@ pub fn run(
     println!("Distilling {} session(s)...", session_ids.len());
     let mut total_items = 0u32;
 
-    // Load existing knowledge items for dedup
-    let existing = store.list_knowledge_items(None, None, 100_000)?;
+    // Load existing knowledge items for dedup — grows as we insert
+    let mut existing = store.list_knowledge_items(None, None, 100_000)?;
 
     for sid in &session_ids {
         let session = match store.get_session(sid)? {
@@ -48,6 +52,9 @@ pub fn run(
         for item in &items {
             store.upsert_knowledge_item(item)?;
         }
+
+        // Add newly created items to existing pool for cross-session dedup
+        existing.extend(items);
 
         store.mark_distilled(sid, count)?;
 

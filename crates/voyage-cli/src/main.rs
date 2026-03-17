@@ -1,9 +1,12 @@
 mod cmd_analytics;
 mod cmd_bank;
+mod cmd_context;
+mod cmd_discover;
 mod cmd_distill;
 mod cmd_graph;
 mod cmd_index;
 mod cmd_ingest;
+mod cmd_learn;
 mod cmd_profile;
 mod cmd_rate;
 mod cmd_report;
@@ -11,6 +14,7 @@ mod cmd_search;
 mod cmd_session;
 mod cmd_stats;
 mod cmd_suggest;
+mod cmd_sync;
 
 use std::path::PathBuf;
 
@@ -172,6 +176,35 @@ enum Commands {
         /// Recompute the profile from all data
         #[arg(long)]
         refresh: bool,
+    },
+    /// Run full pipeline: ingest → extract → distill → promote, with optional CC injection
+    Sync {
+        /// Auto-inject into Claude Code without prompting
+        #[arg(long)]
+        inject: bool,
+    },
+    /// Output project context for Claude Code integration
+    Context {
+        /// Optional query for targeted context retrieval
+        query: Option<String>,
+        /// Maximum search results to include when query is provided
+        #[arg(long, default_value = "5")]
+        limit: usize,
+    },
+    /// Discover knowledge gaps and missed opportunities
+    Discover {
+        /// Scan sessions from the last N days
+        #[arg(long, default_value = "30")]
+        days: u32,
+    },
+    /// Generate Claude Code rules from knowledge bank
+    Learn {
+        /// Preview without writing files
+        #[arg(long)]
+        dry_run: bool,
+        /// Output directory (default: .claude/rules/voyage/)
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Knowledge graph: entity extraction and relationship queries
     Graph {
@@ -458,6 +491,22 @@ fn main() {
 
         // ── Profile ──
         Commands::Profile { refresh } => cmd_profile::run(&db_path, refresh, format),
+
+        // ── Sync (full pipeline + CC injection) ──
+        Commands::Sync { inject } => cmd_sync::run(&data_dir, inject),
+
+        // ── Context (CC integration) ──
+        Commands::Context { query, limit } => {
+            cmd_context::run(&data_dir, query.as_deref(), limit)
+        }
+
+        // ── Discover (gap detection) ──
+        Commands::Discover { days } => cmd_discover::run(&data_dir, days),
+
+        // ── Learn (generate rules) ──
+        Commands::Learn { dry_run, output } => {
+            cmd_learn::run(&db_path, output.as_deref(), dry_run)
+        }
 
         // ── Graph (merged: stats default, show combines mentions+related+cost+timeline) ──
         Commands::Graph { action } => {
