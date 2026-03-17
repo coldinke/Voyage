@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "/Users/vinci/lab/Voyage/target/release/voyage context",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
